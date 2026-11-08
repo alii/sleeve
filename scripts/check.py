@@ -41,6 +41,10 @@ SHOTS = [
     ("drop", "default", "dark", "1280x800", "scripts/drag-library.json"),
     ("drop-light", "selected", "light", "1280x800", "scripts/drag-library.json"),
     ("drop-playlist", "default", "dark", "1280x800", "scripts/drag-playlist.json"),
+    ("renaming", "renaming", "dark", "1280x800", None),
+    ("confirm", "confirm", "dark", "1280x800", None),
+    ("confirm-light", "confirm", "light", "1280x800", None),
+    ("empty", "empty", "light", "1280x800", None),
 ]
 
 

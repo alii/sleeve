@@ -11,6 +11,7 @@ use rbl_db::import::{WalkBudget, audio_files_in, is_audio};
 use rbl_db::write::ImportOutcome;
 
 use crate::analysis::Track;
+use crate::edits::songs;
 use crate::jobs::{Outcome, Reporter};
 use crate::store::{Store, WriteError};
 
@@ -159,9 +160,6 @@ pub fn run(store: &Store, dropped: &[PathBuf], into: Option<&Target>, added: &Mu
     })
 }
 
-fn songs(n: usize) -> String {
-    if n == 1 { "1 song".to_owned() } else { format!("{n} songs") }
-}
 
 /// The tracks an import added, shared between its job and the app.
 pub type Added = Arc<Mutex<Vec<Track>>>;

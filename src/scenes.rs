@@ -81,3 +81,23 @@ pub fn busy(s: &mut App) {
 pub fn finished(s: &mut App) {
     s.jobs.stage(JobKind::Export, "", "", 1, Some(1), Phase::Done { outcome: Outcome::Completed("Exported 540 tracks to KINGSTON".into()), at: 0.0 });
 }
+
+/// Renaming the second playlist in place.
+pub fn renaming(s: &mut App) {
+    if let Some(id) = s.tree.get(1).map(|n| n.id) {
+        s.start_rename(id);
+    }
+}
+
+/// The question before a playlist is deleted.
+pub fn confirm(s: &mut App) {
+    if let Some(id) = s.tree.first().map(|n| n.id) {
+        s.confirm = Some(crate::edits::Confirm::DeletePlaylist(id));
+    }
+}
+
+/// A search that matches nothing.
+pub fn empty(s: &mut App) {
+    s.search = rune::TextEdit::new("zzzz nothing");
+    s.refresh_rows();
+}

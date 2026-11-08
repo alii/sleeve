@@ -43,6 +43,8 @@ pub enum JobKind {
     Edit,
     /// Songs dropped in from Finder, going into the library.
     Import,
+    /// A USB stick being ejected.
+    Eject,
 }
 
 impl JobKind {
@@ -54,6 +56,7 @@ impl JobKind {
             JobKind::Download => "download",
             JobKind::Edit => "change",
             JobKind::Import => "import",
+            JobKind::Eject => "eject",
         }
     }
 }

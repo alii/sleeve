@@ -36,6 +36,9 @@ pub fn build(s: &App, k: &Kit) -> El {
             .height(28.0)
             .selected(s.browse == Browse::Playlist(id) || s.drop_over == Some(DropTarget::Playlist(id)))
             .on_select(move |s: &mut App, tx| s.browse_to(Browse::Playlist(id), tx));
+        if s.renaming == Some(id) {
+            row = row.renaming(&s.rename, |s: &mut App| &mut s.rename, |s: &mut App, _| s.commit_rename(), |s: &mut App, _| s.cancel_rename());
+        }
         if n.kind == PlaylistKind::Folder {
             // A folder opens or closes on a double click and selects on a single one, as Finder's
             // sidebar does.
@@ -45,8 +48,12 @@ pub fn build(s: &App, k: &Kit) -> El {
                 }
                 s.refresh_tree();
             });
-        } else if n.kind == PlaylistKind::Playlist {
-            row = row.detail(n.count.to_string());
+        } else {
+            // A double click renames, as in Finder.
+            row = row.on_double_click(move |s: &mut App, _| s.start_rename(id));
+            if n.kind == PlaylistKind::Playlist {
+                row = row.detail(n.count.to_string());
+            }
         }
         let row = row.build(k).key(format!("nav-pl-{id}")).on_secondary_press(move |s: &mut App, press, tx: &mut rune::Tx| {
             crate::ui::menus::playlist_menu(s, id, press, tx);
@@ -65,19 +72,41 @@ pub fn build(s: &App, k: &Kit) -> El {
         .count(s.tree.iter().filter(|n| n.kind != PlaylistKind::Folder).count())
         .collapsed(s.playlists_closed)
         .on_toggle(|s: &mut App, _| s.playlists_closed ^= true)
+        .action(
+            rune_kit::IconButton::new(&icons::PLUS)
+                .variant(rune_kit::IconButtonVariant::GhostMuted)
+                .control_size(rune_kit::ControlSize::Small)
+                .label("New playlist or folder")
+                .help("New playlist or folder")
+                .on_press_tx(|_: &mut App, tx| crate::ui::menus::new_menu(tx))
+                .build(k)
+                .key("nav-new"),
+        )
         .rows(rows);
 
     let sticks = s.sticks.iter().map(|d| {
         let busy = s.exporting_to(&d.mount);
         let mut row = SidebarRow::new(d.name.clone()).icon(&icons::USB).height(28.0);
+        let mount = d.mount.clone();
+        let eject = rune_kit::IconButton::new(&icons::EJECT)
+            .variant(rune_kit::IconButtonVariant::GhostMuted)
+            .control_size(rune_kit::ControlSize::Small)
+            .label(format!("Eject {}", d.name))
+            .help(format!("Eject {}", d.name))
+            .on_press(move |s: &mut App| s.eject(mount.clone()))
+            .build(k)
+            .key(format!("nav-eject-{}", d.mount.display()));
         row = if busy {
             row.trailing(rune_kit::Spinner::new().size(12.0).build(k))
         } else {
-            row.detail(format!("{} free", bytes(d.free_bytes)))
+            row.detail(format!("{} free", bytes(d.free_bytes))).trailing(eject)
         };
         let tracks = d.export.as_ref().map_or(0, |e| e.tracks);
         let help = if tracks > 0 { format!("{} · {tracks} tracks exported", d.file_system) } else { d.file_system.clone() };
-        row.build(k).key(format!("nav-stick-{}", d.mount.display())).help(help)
+        let mount = d.mount.clone();
+        row.build(k).key(format!("nav-stick-{}", d.mount.display())).help(help).on_secondary_press(move |s: &mut App, press, tx: &mut rune::Tx| {
+            crate::ui::menus::stick_menu(s, mount.clone(), press, tx);
+        })
     });
     let devices = SidebarSection::new("Devices").key("nav-devices").count(s.sticks.len()).rows(sticks);
     // The same 8 points either side as the gap around the main panel.

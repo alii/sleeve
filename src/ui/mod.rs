@@ -10,7 +10,7 @@ pub mod tracks;
 
 use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
 use rune_kit::shell::{self, PaneMotion, SidebarToggle, SplitView, Toolbar};
-use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, TextInput};
+use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit, TextInput};
 
 use crate::app::{App, DropTarget, LibState};
 use crate::library::Browse;
@@ -33,6 +33,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 .child(rune::icon(&icons::WARNING, 20.0).color(c.danger.icon))
                 .child(text(e.clone()).font(k.ty.ui).color(c.text_base).wrap().align(rune::Align::Center)),
         ),
+        LibState::Ready(_) if s.rows.is_empty() => empty(s, k),
         LibState::Ready(_) => tracks::build(s, cx.layout_size("tracks-area").map_or(1200.0, |z| z[0]), k),
     };
     // The panel's width, read off the footer, which always spans it.
@@ -104,10 +105,55 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.drop_over == Some(DropTarget::Library) {
         root = root.child(drop_veil(s, k));
     }
+    let mut layer = Vec::new();
+    confirm(s, k, &mut layer);
+    root = root.children(layer);
     // Songs and folders dragged in from Finder land anywhere in the window.
     root.on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), s.drop_playlist()))
         .accepts_files(crate::import::accepts)
         .on_drop_hover(|s: &mut App, over, _| s.drop_over = over.then_some(DropTarget::Library))
+}
+
+/// The question before anything is deleted: what goes, what stays, and a red button.
+fn confirm(s: &App, k: &Kit, layer: &mut Vec<El>) {
+    use crate::edits::{Confirm, songs};
+    let Some(ask) = &s.confirm else { return };
+    let (title, about, verb) = match ask {
+        Confirm::DeletePlaylist(id) => {
+            let node = s.tree.iter().find(|n| n.id == *id);
+            let name = node.map_or("this playlist", |n| n.name.as_str());
+            let folder = node.is_some_and(|n| n.kind == crate::library::PlaylistKind::Folder);
+            if folder {
+                (format!("Delete the folder “{name}”?"), "Everything inside it goes too. The songs stay in your library.".to_owned(), "Delete folder")
+            } else {
+                (format!("Delete “{name}”?"), "The songs in it stay in your library.".to_owned(), "Delete playlist")
+            }
+        }
+        Confirm::RemoveTracks(ids) => (
+            format!("Remove {} from your library?", songs(ids.len())),
+            "They come out of every playlist too, and lose their cues and analysis. The files stay where they are on your Mac.".to_owned(),
+            "Remove",
+        ),
+    };
+    let ask = ask.clone();
+    let buttons = row()
+        .w_full()
+        .gap(8.0)
+        .px(16.0)
+        .pb(16.0)
+        .justify_end()
+        .child(Button::new("Cancel").variant(ButtonVariant::Outline).on_press(|s: &mut App| s.confirm = None).build(k).key("confirm-cancel"))
+        .child(
+            Button::new(verb)
+                .variant(ButtonVariant::Danger)
+                .on_press(move |s: &mut App| match &ask {
+                    crate::edits::Confirm::DeletePlaylist(id) => s.delete_playlist(*id),
+                    crate::edits::Confirm::RemoveTracks(ids) => s.remove_from_library(ids.clone()),
+                })
+                .build(k)
+                .key("confirm-ok"),
+        );
+    Dialog::new("confirm", title).description(about).width(420.0).fit().open(true).on_close(|s: &mut App| s.confirm = None).child(buttons).build(k, layer);
 }
 
 /// What a drag over the window shows: the window tinted, and where the songs will go.
@@ -148,6 +194,28 @@ fn title(s: &App) -> String {
         (Browse::Playlist(id), Some(_)) => s.tree.iter().find(|n| n.id == id).map_or_else(String::new, |n| n.name.clone()),
         _ => String::new(),
     }
+}
+
+/// What an empty list says instead: why it's empty, and how to fill it.
+fn empty(s: &App, k: &Kit) -> El {
+    let c = &k.c;
+    let searching = !s.search.text.trim().is_empty();
+    let (head, tip) = match s.browse {
+        _ if searching => ("Nothing matches your search".to_owned(), "Try fewer words, or clear the search.".to_owned()),
+        Browse::Playlist(_) if s.drop_playlist().is_some() => ("This playlist is empty".to_owned(), "Drag songs here from Finder, or right-click songs in your collection and choose Add to.".to_owned()),
+        Browse::Playlist(_) => ("Nothing in here yet".to_owned(), String::new()),
+        Browse::Collection => ("Your library is empty".to_owned(), "Drag songs or folders here from Finder to add them.".to_owned()),
+    };
+    centred(
+        col()
+            .key("empty")
+            .gap(6.0)
+            .items_center()
+            .max_w(360.0)
+            .child(rune::icon(&icons::DROP, 22.0).color(c.icon_faint))
+            .child(text(head).font(k.ty.ui_medium).color(c.text_base))
+            .child(text(tip).font(k.ty.small).color(c.text_muted).wrap().align(rune::Align::Center)),
+    )
 }
 
 fn centred(e: El) -> El {
@@ -196,6 +264,18 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     {
         s.hot_cue(d as u8 - b'1', tx);
         return true;
+    }
+    // Delete takes the selected songs out of the playlist on screen, or, in the collection,
+    // asks before removing them from the library.
+    if matches!(ev.key, rune::Key::Backspace | rune::Key::Delete) && !ev.mods.alt && !ev.mods.ctrl && s.renaming.is_none() {
+        let ids = s.selected_ids();
+        if !ids.is_empty() {
+            match s.browse {
+                Browse::Playlist(_) if !ev.mods.cmd => s.remove_from_playlist(),
+                Browse::Playlist(_) | Browse::Collection => s.confirm = Some(crate::edits::Confirm::RemoveTracks(ids)),
+            }
+            return true;
+        }
     }
     if shell::is_sidebar_toggle(ev) {
         s.sidebar.toggle();

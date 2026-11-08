@@ -278,28 +278,8 @@ impl App {
     /// Saves a cue change as a job, so it shows its status, can be stopped before it writes,
     /// and logs what happened. The library is read again once it's saved.
     fn write_cue(&mut self, what: String, change: impl FnOnce(&mut rbl_db::write::Writer) -> rbl_db::Result<()> + Send + 'static) {
-        let Some(l) = self.loaded() else { return };
-        let store = l.store.clone();
-        let track = self.deck_row().map(|r| l.index.title.get(r as usize).to_owned()).unwrap_or_default();
-        let title = format!("Saving {what}");
-        self.jobs.spawn(crate::jobs::JobKind::Edit, title, move |rep| {
-            use crate::jobs::Outcome;
-            rep.info(format!("Track: \"{track}\". Library: {}", store.location.share_root.display()));
-            if rep.is_cancelled() {
-                return Outcome::Stopped(format!("Didn't save {what}"));
-            }
-            match store.write(change) {
-                Ok(()) => Outcome::Completed(format!("Saved {what}")),
-                Err(crate::store::WriteError::Refused(why)) => {
-                    rep.warn(format!("The library refused the write: {why}"));
-                    Outcome::Failed(why)
-                }
-                Err(crate::store::WriteError::Failed(e)) => {
-                    rep.error(format!("Database write failed: {e} ({e:?})"));
-                    Outcome::Failed(format!("Couldn't save {what}: {e}"))
-                }
-            }
-        });
+        let track = self.loaded().zip(self.deck_row()).map(|(l, r)| l.index.title.get(r as usize).to_owned()).unwrap_or_default();
+        self.change(format!("Saving {what} on \"{track}\""), format!("Saved {what}"), change);
     }
 }
 

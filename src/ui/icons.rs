@@ -69,3 +69,15 @@ pub static DROP: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M8 2.5V9.5M5.25 6.75L8 9.5L10.75 6.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2.75 9.75V11.75C2.75 12.3 3.2 12.75 3.75 12.75H12.25C12.8 12.75 13.25 12.3 13.25 11.75V9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
+
+pub static PLUS: Icon = Icon {
+    name: "sleeve-plus",
+    view: 16.0,
+    body: r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#,
+};
+
+pub static EJECT: Icon = Icon {
+    name: "sleeve-eject",
+    view: 16.0,
+    body: r#"<path d="M8 3.25L12.5 8.75H3.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M3.5 11.75H12.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
+};

@@ -67,6 +67,15 @@ pub struct App {
     imports: Vec<(crate::jobs::JobId, crate::import::Added)>,
     /// Where a file drag from Finder would land right now, for the drop highlight.
     pub drop_over: Option<DropTarget>,
+    /// The playlist being renamed in the sidebar, and the field holding its new name.
+    pub renaming: Option<u64>,
+    pub rename: TextEdit,
+    /// A question on screen before something is deleted.
+    pub confirm: Option<crate::edits::Confirm>,
+    /// A playlist being made, and the id its job hands back.
+    pub(crate) created: Option<(crate::jobs::JobId, crate::edits::Slot<String>)>,
+    /// A playlist just made, to open and name once the library is read again.
+    pub(crate) rename_next: Option<u64>,
     /// The iCloud download the deck is waiting on: its job, the track and where to start.
     pub fetch: Option<(crate::jobs::JobId, String, Option<f64>)>,
     /// The job whose log is open in the Activity panel.
@@ -128,6 +137,11 @@ impl App {
             glides: std::cell::RefCell::new(None),
             imports: Vec::new(),
             drop_over: None,
+            renaming: None,
+            rename: TextEdit::new(""),
+            confirm: None,
+            created: None,
+            rename_next: None,
             shown: (0, 0, 0, 0),
             fetch: None,
             log_open: None,
@@ -308,7 +322,8 @@ impl App {
                 Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Failed(_) | crate::jobs::Outcome::Stopped(_), .. } | crate::jobs::Phase::Running | crate::jobs::Phase::Stopping) | None => {}
             }
         }
-        if finished.iter().any(|(_, kind)| *kind == JobKind::Export) {
+        self.take_created(&finished);
+        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Export | JobKind::Eject)) {
             self.refresh_sticks();
         }
         let live: Vec<_> = self.jobs.list().iter().map(|j| j.id).collect();
@@ -347,6 +362,7 @@ impl App {
             Err(e) => LibState::Failed(e.to_string()),
         };
         self.refresh_tree();
+        self.land_created();
         self.refresh_rows();
         self.sync_artwork();
         self.sync_deck_wave();

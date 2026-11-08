@@ -1,6 +1,7 @@
 mod analysis;
 mod app;
 mod deck;
+mod edits;
 mod demo;
 mod icloud;
 mod import;
@@ -42,7 +43,7 @@ fn main() {
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),
         min_size: Some((820.0, 520.0)),
-        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log)],
+        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty)],
         ..AppSpec::new("Sleeve", (1280.0, 800.0), App::new, ui::view)
     };
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((26.0, 25.0)), drag_regions: true };
