@@ -27,6 +27,14 @@ pub struct DeckWave {
     pub detail: Option<crate::waveform::Detail>,
 }
 
+/// What the deck's worker reads for a track: its beat grid and zoomed waveform.
+pub struct DeckGrid {
+    id: String,
+    generation: u64,
+    beats: Vec<rbl_anlz::Beat>,
+    detail: Option<crate::waveform::Detail>,
+}
+
 /// How much of the track the zoomed waveform shows, in seconds: from about two beats to
 /// about sixteen bars at 128 BPM.
 pub const ZOOMS: [f64; 6] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
@@ -104,7 +112,8 @@ impl App {
         }
         // Asking for any other track means a download waiting to play is no longer wanted.
         self.cancel_fetch();
-        if crate::icloud::is_evicted(&path) {
+        // From the scan, not the disk: this runs on the main thread.
+        if self.evicted.contains(&row) {
             // What's playing keeps playing while this one downloads, and it takes over once
             // it's down. With nothing playing, the deck shows it straight away.
             if !self.player.playing {
@@ -124,8 +133,7 @@ impl App {
             self.player.seek(at);
             return;
         }
-        let waker = self.waker.clone();
-        self.player.play(id, path, at, waker.as_ref());
+        self.player.play(id, path, at);
         self.sync_deck_wave();
         tx.wake_after(std::time::Duration::from_millis(33));
     }
@@ -164,10 +172,36 @@ impl App {
         let rel = l.index.analysis_path.get(row as usize).to_owned();
         crate::waveform::load_into(pixels.clone(), l.location.share_root.clone(), rel.clone(), WAVE_PX.0, WAVE_PX.1);
         let art = self.artwork_for(row, 88.0);
-        // The grid is a few kilobytes, so it's read here rather than on a worker.
-        let beats = read_beats(&l.location.share_root, &rel);
-        let detail = crate::waveform::load_detail(&l.location.share_root, &rel);
-        self.deck_wave = Some(DeckWave { id, generation: l.generation, pixels, art, beats, detail });
+        // The grid and the zoomed waveform are read on a worker, never here: the disk may be
+        // slow, and the window must keep drawing. They land in `poll`.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (share, generation, wanted, waker) = (l.location.share_root.clone(), l.generation, id.clone(), self.waker.clone());
+        std::thread::spawn(move || {
+            let beats = read_beats(&share, &rel);
+            let detail = crate::waveform::load_detail(&share, &rel);
+            if tx.send(DeckGrid { id: wanted, generation, beats, detail }).is_ok()
+                && let Some(w) = waker
+            {
+                w();
+            }
+        });
+        self.deck_grid_rx = Some(rx);
+        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats: Vec::new(), detail: None });
+    }
+
+    /// Takes the grid and zoomed waveform once the worker has read them. Returns true when
+    /// they changed what's shown.
+    pub(crate) fn land_deck_grid(&mut self) -> bool {
+        let Some(grid) = self.deck_grid_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return false };
+        self.deck_grid_rx = None;
+        match self.deck_wave.as_mut() {
+            Some(w) if w.id == grid.id && w.generation == grid.generation => {
+                w.beats = grid.beats;
+                w.detail = grid.detail;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The deck track's length in ms: the decoder's when it knows, else the library's.

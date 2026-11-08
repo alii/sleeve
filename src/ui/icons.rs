@@ -73,7 +73,7 @@ pub static DROP: Icon = Icon {
 pub static PLUS: Icon = Icon {
     name: "sleeve-plus",
     view: 16.0,
-    body: r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#,
+    body: r#"<path d="M8 3V13M3 8H13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#,
 };
 
 pub static EJECT: Icon = Icon {

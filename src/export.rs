@@ -123,6 +123,27 @@ pub fn run(store: &Arc<Store>, index: Arc<Index>, playlists: Vec<u64>, stick: Pa
         return unchanged(&name);
     }
 
+    // Songs the stick needs that are only in iCloud come down first, where the stop button
+    // works. Read inside the exporter, each would hold it for its whole download.
+    let plan = rbl_export::estimate::estimate(&stick, selection.sync.db_id, &selection.tracks, false, None);
+    let needed: Vec<PathBuf> = selection
+        .tracks
+        .iter()
+        .filter(|t| matches!(plan.actions.get(&rbl_export::manifest::track_key(t.id, &t.source_path.to_string_lossy())), Some(rbl_export::estimate::AudioAction::Copy | rbl_export::estimate::AudioAction::Convert)))
+        .map(|t| t.source_path.clone())
+        .collect();
+    match crate::icloud::fetch_all(&needed, rep) {
+        Ok(failed) if failed.is_empty() => {}
+        Ok(failed) => {
+            let n = failed.len();
+            return Outcome::Failed(format!("Couldn't download {} from iCloud, so nothing was written to {name}. The log says which.", count(n, "song")));
+        }
+        Err(crate::icloud::Stopped) => return unchanged(&name),
+    }
+    if rep.is_cancelled() {
+        return unchanged(&name);
+    }
+
     let result = write(&selection, &stick, &name, &volume, rep);
     if let Some(cache) = CACHE.as_ref() {
         let _ = cache.prune(CACHE_BUDGET);
@@ -132,11 +153,15 @@ pub fn run(store: &Arc<Store>, index: Arc<Index>, playlists: Vec<u64>, stick: Pa
             log_report(&report, rep);
             finished(&name, &report)
         }
-        Err(ExportError::Cancelled) => {
+        Err(WriteFailure::Unplugged) => {
+            rep.error(format!("{name} disappeared from {} during the export.", stick.display()));
+            Outcome::Failed(format!("{name} was unplugged during the export. Plug it back in and export again: Sleeve finishes or undoes the half-done export first, so nothing on it is left broken."))
+        }
+        Err(WriteFailure::Export(ExportError::Cancelled)) => {
             rep.info("The exporter stopped and rolled back. Nothing on the drive changed.");
             unchanged(&name)
         }
-        Err(e) => {
+        Err(WriteFailure::Export(e)) => {
             rep.error(format!("Export error: {e} ({e:?})"));
             Outcome::Failed(failure(&name, &stick, &volume, &e))
         }
@@ -172,7 +197,14 @@ fn log_report(r: &ExportReport, rep: &Reporter) {
     }
 }
 
-fn write(selection: &Selection, stick: &Path, name: &str, volume: &VolumeIdentity, rep: &mut Reporter) -> Result<ExportReport, ExportError> {
+/// Why writing to the stick stopped short.
+enum WriteFailure {
+    /// The stick went away mid-export.
+    Unplugged,
+    Export(ExportError),
+}
+
+fn write(selection: &Selection, stick: &Path, name: &str, volume: &VolumeIdentity, rep: &mut Reporter) -> Result<ExportReport, WriteFailure> {
     // A fresh HFS+ stick gets the hidden `.PIONEER` root, as rekordbox gives it.
     let root = rbl_devices::list()
         .into_iter()
@@ -187,7 +219,25 @@ fn write(selection: &Selection, stick: &Path, name: &str, volume: &VolumeIdentit
         ..Default::default()
     };
     let flag = rep.token().flag();
-    let cancelled = move || flag.load(Ordering::Acquire);
+    // A stick pulled out mid-export stops it at once rather than leaving it to fail file by
+    // file. The watcher asks the disk, so it runs on its own thread: a dying drive can be slow
+    // to answer.
+    let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let (gone, done, stick) = (gone.clone(), done.clone(), stick.to_owned());
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Acquire) {
+                if !stick.is_dir() {
+                    gone.store(true, Ordering::Release);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        });
+    }
+    let unplugged = gone.clone();
+    let cancelled = move || flag.load(Ordering::Acquire) || unplugged.load(Ordering::Acquire);
     let mut title = String::new();
     let mut last_track = String::new();
     let mut progress = |p: &ExportProgress| {
@@ -204,7 +254,13 @@ fn write(selection: &Selection, stick: &Path, name: &str, volume: &VolumeIdentit
         let total = (total > 0).then_some(total as u64);
         rep.progress(done as u64, total, p.title.as_str());
     };
-    let report = rbl_export::export_cancellable(stick, &selection.tracks, &selection.playlists, &selection.my_tags, &options, &mut progress, &cancelled)?;
+    let report = rbl_export::export_cancellable(stick, &selection.tracks, &selection.playlists, &selection.my_tags, &options, &mut progress, &cancelled);
+    done.store(true, Ordering::Release);
+    // The watcher may not have looked yet when a write to the missing stick failed first.
+    if gone.load(Ordering::Acquire) || (report.is_err() && !stick.is_dir()) {
+        return Err(WriteFailure::Unplugged);
+    }
+    let report = report.map_err(WriteFailure::Export)?;
     rep.progress(selection.tracks.len() as u64, Some(selection.tracks.len() as u64), "");
     Ok(report)
 }
@@ -620,6 +676,66 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(60), "the export timed out");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn pulling_the_stick_out_fails_cleanly_and_the_next_export_finishes() {
+        let library = TempDir::new("library-pull");
+        let music = TempDir::new("music-pull");
+        let stick = TempDir::new("stick-pull");
+        let away = stick.0.with_extension("away");
+        let _ = std::fs::remove_dir_all(&away);
+
+        // Big enough files that the export is still copying when the stick goes.
+        let shape = fixture::Shape { tracks: 30, playlists: 1, tracks_per_playlist: 30, ..Default::default() };
+        let location = fixture::build(&library.0, shape).unwrap();
+        for i in 0..shape.tracks {
+            let path = music.0.join(format!("track-{i}.mp3"));
+            std::fs::write(&path, vec![i as u8; 24 * 1024 * 1024]).unwrap();
+            fixture::point_at_audio(&location, i, path.to_str().unwrap(), 200).unwrap();
+        }
+        let db = rbl_db::Library::open(location.clone(), OpenMode::ReadOnly).unwrap();
+        let index = Arc::new(rbl_index::load(&db).unwrap().0);
+        drop(db);
+        let store = Arc::new(Store::new(location));
+        let list: u64 = fixture::playlist_id(0).parse().unwrap();
+
+        // "Unplug" it shortly after the export starts: its folder goes away.
+        let (from, to) = (stick.0.clone(), away.clone());
+        let puller = std::thread::spawn(move || {
+            // Wait for the copying to be under way: some bytes of audio on the stick.
+            let start = Instant::now();
+            let copying = |dir: &Path| -> bool {
+                let mut stack = vec![dir.to_owned()];
+                while let Some(d) = stack.pop() {
+                    for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if p.extension().is_some_and(|x| x == "mp3") && e.metadata().is_ok_and(|m| m.len() > 0) {
+                            return true;
+                        }
+                    }
+                }
+                false
+            };
+            while !copying(&from) && start.elapsed() < Duration::from_secs(20) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            std::fs::rename(&from, &to).unwrap();
+        });
+        let outcome = export(&store, &index, vec![list], &stick.0, false);
+        puller.join().unwrap();
+        let Outcome::Failed(why) = &outcome else { panic!("pulling the stick out must fail the export, got {outcome:?}") };
+        assert!(why.contains("unplugged"), "{why}");
+
+        // Plugged back in, the next export finishes the job and the stick checks out.
+        std::fs::rename(&away, &stick.0).unwrap();
+        let outcome = export(&store, &index, vec![list], &stick.0, false);
+        assert!(matches!(outcome, Outcome::Completed(_)), "{outcome:?}");
+        assert!(!rbl_export::recovery_pending(&stick.0));
+        let seen = rbl_devices::inspect(&stick.0).expect("the stick holds an export");
+        assert_eq!(seen.tracks, 30);
     }
 
     #[test]

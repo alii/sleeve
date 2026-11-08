@@ -213,10 +213,13 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
         col()
             .key("activity")
             .w_full()
-            .border_sides([1.0, 0.0, 0.0, 0.0], c.border_muted)
-            .fill(c.bg_base)
+            // A sheet pulled up over the list: a firm top edge, a raised surface, and a shadow
+            // cast up onto the rows so it never reads as more of them.
+            .border_sides([1.0, 0.0, 0.0, 0.0], c.border_base)
+            .fill(c.layer_01)
+            .shadow(-6.0, 18.0, rune::Color::BLACK.alpha(if k.dark { 0.45 } else { 0.12 }))
             .transition(Transition::offset(0.0, 12.0))
-            .child(header)
+            .child(header.border_sides([0.0, 0.0, 1.0, 0.0], c.border_muted))
             .child(col().key("activity-rows").w_full().max_h(360.0).scroll(rune::ScrollSpec { stick_bottom: false }).children(rows)),
     )
 }

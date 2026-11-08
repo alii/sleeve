@@ -26,6 +26,10 @@ pub struct Player {
     /// Where the playhead is, 0 to 1.
     pub pos: f64,
     pub error: Option<String>,
+    /// The audio output while a worker opens it, and a play asked for before it was ready.
+    opening: Option<Receiver<Result<(Engine, Receiver<String>), rbl_deck::DeckError>>>,
+    queued: Option<(String, PathBuf, Option<f64>)>,
+    waker: Option<Waker>,
     /// The deck's track is coming down from iCloud and will play when it lands.
     pub fetching: bool,
     /// Where the playhead was and when, and whether it's moving. The waveforms draw from this
@@ -67,34 +71,55 @@ impl Anchor {
 }
 
 impl Player {
-    fn engine(&mut self, waker: Option<&Waker>) -> Option<&Engine> {
-        if self.engine.is_none() {
-            if rune::tooling::headless_run().is_some() {
-                return None;
-            }
-            let (tx, rx) = channel();
-            let waker = waker.cloned();
+    /// Opens the audio output on a worker. Opening a device can take a while (a Bluetooth
+    /// speaker waking up), and the window must never wait for it. Called once at launch.
+    pub fn open(&mut self, waker: Option<Waker>) {
+        if self.engine.is_some() || self.opening.is_some() || rune::tooling::headless_run().is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        let w = waker.clone();
+        std::thread::spawn(move || {
+            let (etx, erx) = channel();
+            let ew = w.clone();
             let sink: rbl_deck::EventSink = Arc::new(move |e| {
                 if let DeckEvent::Error { message, .. } = e {
-                    let _ = tx.send(message);
-                    if let Some(w) = &waker {
+                    let _ = etx.send(message);
+                    if let Some(w) = &ew {
                         w();
                     }
                 }
             });
-            match Engine::new(&sink) {
-                Ok(e) => {
-                    // The timing runs play silently.
-                    if std::env::var_os("SLEEVE_AUTOPLAY").is_some() {
-                        e.master().set_gain(0.0);
-                    }
+            let opened = Engine::new(&sink).map(|e| {
+                // The timing runs play silently.
+                if std::env::var_os("SLEEVE_AUTOPLAY").is_some() {
+                    e.master().set_gain(0.0);
+                }
+                (e, erx)
+            });
+            if tx.send(opened).is_ok()
+                && let Some(w) = w
+            {
+                w();
+            }
+        });
+        self.opening = Some(rx);
+        self.waker = waker;
+    }
+
+    /// The engine, once the worker has opened it.
+    fn engine(&mut self) -> Option<&Engine> {
+        if self.engine.is_none()
+            && let Some(rx) = &self.opening
+            && let Ok(opened) = rx.try_recv()
+        {
+            self.opening = None;
+            match opened {
+                Ok((e, errors)) => {
                     self.engine = Some(e);
-                    self.errors = Some(rx);
+                    self.errors = Some(errors);
                 }
-                Err(e) => {
-                    self.error = Some(format!("Couldn't open the audio output: {e}"));
-                    return None;
-                }
+                Err(e) => self.error = Some(format!("Couldn't open the audio output: {e}")),
             }
         }
         self.engine.as_ref()
@@ -139,8 +164,18 @@ impl Player {
     }
 
     /// Plays `row` from `at` (0 to 1), loading it first if it isn't on the deck.
-    pub fn play(&mut self, id: &str, path: PathBuf, at: Option<f64>, waker: Option<&Waker>) {
+    pub fn play(&mut self, id: &str, path: PathBuf, at: Option<f64>) {
         self.error = None;
+        if self.engine().is_none() {
+            // Still opening: play as soon as it's open.
+            if self.opening.is_some() {
+                self.track = Some(id.to_owned());
+                self.pos = at.unwrap_or(0.0);
+                self.playing = true;
+                self.queued = Some((id.to_owned(), path, at));
+            }
+            return;
+        }
         if self.fetching && !self.is_on(id) {
             self.fetching = false;
         }
@@ -150,7 +185,7 @@ impl Player {
         if !same {
             self.request += 1;
             let request = self.request;
-            let Some(engine) = self.engine(waker) else { return };
+            let Some(engine) = self.engine() else { return };
             engine.pause(Deck::A);
             engine.load_as(Deck::A, &path, request);
             self.loaded = Some(id.to_owned());
@@ -161,7 +196,7 @@ impl Player {
             self.reanchor(self.pos, false);
             return;
         }
-        let Some(engine) = self.engine(waker) else { return };
+        let Some(engine) = self.engine() else { return };
         let snap = engine.snapshot().a;
         if !snap.loaded {
             self.pending = Some(at.unwrap_or(self.pos));
@@ -240,6 +275,15 @@ impl Player {
             self.playing = false;
             self.pending = None;
             changed = true;
+        }
+        if self.engine.is_none() && self.opening.is_some() {
+            let _ = self.engine();
+            if self.engine.is_some() {
+                changed = true;
+                if let Some((id, path, at)) = self.queued.take() {
+                    self.play(&id, path, at);
+                }
+            }
         }
         let Some(engine) = &self.engine else { return changed };
         let snap = engine.snapshot().a;

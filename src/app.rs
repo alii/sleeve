@@ -53,6 +53,12 @@ pub struct App {
     pub jobs: Jobs,
     pub player: crate::player::Player,
     pub deck_wave: Option<crate::deck::DeckWave>,
+    /// The deck track's grid and zoomed waveform, coming from a worker.
+    pub(crate) deck_grid_rx: Option<Receiver<crate::deck::DeckGrid>>,
+    /// The rows whose files are only in iCloud, found by a worker after each load so the list
+    /// never asks the disk while drawing. Empty until the first scan lands.
+    pub evicted: HashSet<Row>,
+    evicted_rx: Option<Receiver<(u64, HashSet<Row>)>>,
     /// Quantise: new hot cues and clicks on the deck waveform snap to the nearest beat.
     pub quantize: bool,
     /// Seconds of track the zoomed waveform shows across its width.
@@ -135,6 +141,9 @@ impl App {
             quantize: true,
             zoom_secs: 4.0,
             glides: std::cell::RefCell::new(None),
+            deck_grid_rx: None,
+            evicted: HashSet::new(),
+            evicted_rx: None,
             imports: Vec::new(),
             drop_over: None,
             renaming: None,
@@ -174,6 +183,7 @@ impl App {
             self.jobs.log_to(&path);
         }
         self.images = Some(ImageCache::new(waker.clone()));
+        self.player.open(Some(waker.clone()));
         self.waker = Some(waker);
         if matches!(self.lib, LibState::Loading) {
             self.start_load();
@@ -283,6 +293,16 @@ impl App {
             }
         }
         changed |= self.player.tick();
+        changed |= self.land_deck_grid();
+        if let Some(rx) = &self.evicted_rx
+            && let Ok((generation, rows)) = rx.try_recv()
+        {
+            self.evicted_rx = None;
+            if self.loaded().is_some_and(|l| l.generation == generation) {
+                self.evicted = rows;
+                changed = true;
+            }
+        }
         if self.player.playing {
             // The waveforms glide by themselves; only the readouts need the view, a few times a
             // second.
@@ -315,7 +335,12 @@ impl App {
                 self.player.fetching = false;
             }
             match self.jobs.get(job).map(|j| j.phase.clone()) {
-                Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_), .. }) => self.play_track(&id, at, tx),
+                Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_), .. }) => {
+                    if let Some(row) = self.loaded().and_then(|l| l.index.row_of(&id)) {
+                        self.evicted.remove(&row);
+                    }
+                    self.play_track(&id, at, tx);
+                }
                 // The job's chip carries the error either way; the deck shows it too if it was
                 // showing this track.
                 Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Failed(why), .. }) if shown => self.player.error = Some(why),
@@ -348,6 +373,23 @@ impl App {
         changed
     }
 
+    /// Finds which tracks are only in iCloud, on a worker. A slow or stuck disk (a network
+    /// share gone quiet) holds up only the worker.
+    fn scan_evicted(&mut self) {
+        let Some(l) = self.loaded() else { return };
+        let (index, generation, waker) = (l.index.clone(), l.generation, self.waker.clone());
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let rows: HashSet<Row> = (0..index.len()).filter(|&i| crate::icloud::is_evicted(std::path::Path::new(index.folder_path.get(i)))).map(|i| i as Row).collect();
+            if tx.send((generation, rows)).is_ok()
+                && let Some(w) = waker
+            {
+                w();
+            }
+        });
+        self.evicted_rx = Some(rx);
+    }
+
     /// The deck's clock (elapsed and left, in seconds) and bar.beat, as shown now.
     fn deck_readout(&self) -> (u32, u32, i32, u16) {
         let total = self.deck_duration_ms().unwrap_or(0.0);
@@ -362,6 +404,7 @@ impl App {
             Err(e) => LibState::Failed(e.to_string()),
         };
         self.refresh_tree();
+        self.scan_evicted();
         self.land_created();
         self.refresh_rows();
         self.sync_artwork();

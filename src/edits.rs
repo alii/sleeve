@@ -220,16 +220,40 @@ impl App {
         let name = self.sticks.iter().find(|s| s.mount == mount).map_or_else(|| mount.display().to_string(), |s| s.name.clone());
         self.jobs.spawn(JobKind::Eject, format!("Ejecting {name}"), move |rep| {
             rep.info(format!("Ejecting {}", mount.display()));
-            match rbl_devices::eject::eject(&mount) {
-                Ok(()) => Outcome::Completed(format!("Ejected {name}. It's safe to unplug.")),
-                Err(e) => {
-                    rep.error(format!("Eject failed: {e} ({e:?})"));
-                    Outcome::Failed(format!("Couldn't eject {name}. Close anything using it and try again. ({e})"))
+            // macOS can sit on an eject for a long time. The job waits on a worker, so its stop
+            // button works and it gives up rather than hanging.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let target = mount.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(rbl_devices::eject::eject(&target));
+            });
+            let started = std::time::Instant::now();
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(Ok(())) => return Outcome::Completed(format!("Ejected {name}. It's safe to unplug.")),
+                    Ok(Err(e)) => {
+                        rep.error(format!("Eject failed: {e} ({e:?})"));
+                        return Outcome::Failed(format!("Couldn't eject {name}. Close anything using it and try again. ({e})"));
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Outcome::Failed(format!("Couldn't eject {name}")),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if rep.is_cancelled() {
+                            rep.info("Stopped waiting. macOS may still eject it.");
+                            return Outcome::Stopped(format!("Stopped waiting for {name} to eject"));
+                        }
+                        if started.elapsed() > EJECT_WAIT {
+                            rep.error(format!("macOS hadn't ejected it after {}s.", EJECT_WAIT.as_secs()));
+                            return Outcome::Failed(format!("{name} didn't eject. Something may be using it: close it and try again."));
+                        }
+                    }
                 }
             }
         });
     }
 }
+
+/// How long an eject may take before the job gives up on it.
+const EJECT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub fn songs(n: usize) -> String {
     if n == 1 { "1 song".to_owned() } else { format!("{n} songs") }

@@ -70,13 +70,24 @@ pub fn run(store: &Store, dropped: &[PathBuf], into: Option<&Target>, added: &Mu
         return Outcome::Failed("None of those are songs Sleeve can add. It takes MP3, AAC, WAV, AIFF and FLAC.".into());
     }
 
+    // Songs only in iCloud come down first, where the stop button works; inside a write they
+    // would hold the library for as long as the download takes.
+    let missing = match crate::icloud::fetch_all(&files, rep) {
+        Ok(m) => m,
+        Err(crate::icloud::Stopped) => return Outcome::Stopped("Stopped before adding anything".into()),
+    };
+    let skipped_cloud = missing.len();
+    files.retain(|f| !missing.iter().any(|(m, _)| m == f));
+    if files.is_empty() {
+        return Outcome::Failed("Couldn't download any of those songs from iCloud".into());
+    }
     let total = files.len() as u64;
     rep.retitle(match into {
         Some(pl) => format!("Adding {} to {}", songs(files.len()), pl.name),
         None => format!("Adding {}", songs(files.len())),
     });
     rep.progress(0, Some(total), "");
-    let (mut new, mut existing, mut skipped) = (0usize, 0usize, 0usize);
+    let (mut new, mut existing, mut skipped) = (0usize, 0usize, skipped_cloud);
     let mut ids = Vec::new();
     for (n, batch) in files.chunks(BATCH).enumerate() {
         if rep.is_cancelled() {

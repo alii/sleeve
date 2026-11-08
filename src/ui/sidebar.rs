@@ -80,7 +80,9 @@ pub fn build(s: &App, k: &Kit) -> El {
                 .help("New playlist or folder")
                 .on_press_tx(|_: &mut App, tx| crate::ui::menus::new_menu(tx))
                 .build(k)
-                .key("nav-new"),
+                .key("nav-new")
+                // The glyph's right edge lines up with the counts on the rows, not the button's.
+                .mr(-4.5),
         )
         .rows(rows);
 

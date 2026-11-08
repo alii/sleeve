@@ -64,8 +64,8 @@ pub struct Detail {
     pub cols: usize,
 }
 
-/// Reads the detailed three-band waveform (`PWV7`) and starts drawing its tiles. The read is
-/// small and done here; the drawing happens on a worker.
+/// Reads the detailed three-band waveform (`PWV7`) and starts drawing its tiles on another
+/// worker. Call it off the main thread: it reads the disk.
 pub fn load_detail(share_root: &Path, analysis_path: &str) -> Option<Detail> {
     if analysis_path.is_empty() {
         return None;

@@ -395,8 +395,13 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], total_ms: f64, view_w: f3
     };
     strip = strip.child(
         row()
-            .absolute(view_w - 56.0, 4.0)
+            .absolute(view_w - 60.0, 2.0)
             .gap(4.0)
+            .px(2.0)
+            .py(2.0)
+            .radius(6.0)
+            // Solid, so bar numbers scrolling past don't show through.
+            .fill(screen())
             .child(zoom_btn("−", 1, "deck-zoom-out", "Zoom out · -"))
             .child(zoom_btn("+", -1, "deck-zoom-in", "Zoom in · =")),
     );

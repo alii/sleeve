@@ -82,7 +82,7 @@ fn cell(s: &App, i: usize, col: &str, k: &Kit) -> Cell {
             if let Some(ink) = track_color(f.color) {
                 cell = cell.child(el().size(6.0, 6.0).radius(3.0).fill(ink));
             }
-            if crate::icloud::is_evicted(std::path::Path::new(l.index.folder_path.get(row_ix as usize))) {
+            if s.evicted.contains(&row_ix) {
                 cell = cell.child(rune::icon(&crate::ui::icons::CLOUD, 13.0).color(k.c.icon_faint).help("In iCloud. It downloads when you play it."));
             }
             Cell::el(cell)

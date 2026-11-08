@@ -173,3 +173,37 @@ pub fn run(path: &Path, title: &str, rep: &mut crate::jobs::Reporter) -> crate::
         }
     }
 }
+
+/// A job's stop button was pressed while it was bringing files down from iCloud.
+pub struct Stopped;
+
+/// Brings every iCloud-only file in `paths` down before a job reads them, one at a time with
+/// progress, so its stop button works the whole way. Reading such a file any other way waits
+/// for the whole download with no way to stop it. Returns the files that couldn't be
+/// downloaded, each with why, for the job to leave out.
+pub fn fetch_all(paths: &[std::path::PathBuf], rep: &mut crate::jobs::Reporter) -> Result<Vec<(std::path::PathBuf, String)>, Stopped> {
+    let cloud: Vec<_> = paths.iter().filter(|p| is_evicted(p)).collect();
+    if cloud.is_empty() {
+        return Ok(Vec::new());
+    }
+    let total: u64 = cloud.iter().map(|p| std::fs::metadata(p).map_or(0, |m| m.len())).sum();
+    rep.info(format!("{} only in iCloud ({}). Downloading them first.", if cloud.len() == 1 { "1 file is".to_owned() } else { format!("{} files are", cloud.len()) }, size(total)));
+    rep.retitle(format!("Downloading {} from iCloud", if cloud.len() == 1 { "1 song".to_owned() } else { format!("{} songs", cloud.len()) }));
+    let token = rep.token();
+    let (mut before, mut failed) = (0u64, Vec::new());
+    for p in cloud {
+        let name = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let this = std::fs::metadata(p).map_or(0, |m| m.len());
+        let result = download(p, || token.is_cancelled(), |done, _| rep.progress(before + done, Some(total.max(1)), format!("{name} · {} of {}", size(before + done), size(total))));
+        match result {
+            Ok(()) => rep.info(format!("Downloaded \"{name}\" ({}).", size(this))),
+            Err(DownloadError::Stopped) => return Err(Stopped),
+            Err(e) => {
+                rep.warn(format!("Couldn't download \"{name}\": {e}. {}. File: {}", e.detail(), p.display()));
+                failed.push((p.clone(), e.to_string()));
+            }
+        }
+        before += this;
+    }
+    Ok(failed)
+}
