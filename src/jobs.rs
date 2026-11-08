@@ -41,6 +41,8 @@ pub enum JobKind {
     Download,
     /// A small change to the library, such as a hot cue.
     Edit,
+    /// Songs dropped in from Finder, going into the library.
+    Import,
 }
 
 impl JobKind {
@@ -51,6 +53,7 @@ impl JobKind {
             JobKind::Export => "export",
             JobKind::Download => "download",
             JobKind::Edit => "change",
+            JobKind::Import => "import",
         }
     }
 }

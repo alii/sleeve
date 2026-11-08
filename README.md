@@ -26,6 +26,8 @@ To open it again later, run `cd sleeve && cargo run --release`.
 
 ## Good to know
 
+- To add songs, drag them or their folders from Finder onto Sleeve. Drop them on a playlist to add them there too. Sleeve analyses them straight away.
+- To put a playlist on a USB stick, right-click it.
 - Sleeve backs up your library before it changes anything.
 - Close rekordbox first. Sleeve won't change your library while rekordbox is open.
 - Songs stored in iCloud download when you play them.

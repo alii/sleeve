@@ -17,6 +17,17 @@ pub enum LibState {
     Failed(String),
 }
 
+/// Where a file drag from Finder would land.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DropTarget {
+    /// The window: into the library, and the playlist on screen if there is one.
+    Library,
+    /// The Collection row in the sidebar: into the library only.
+    Collection,
+    /// A playlist in the sidebar.
+    Playlist(u64),
+}
+
 pub struct App {
     pub source: Source,
     pub lib: LibState,
@@ -51,6 +62,11 @@ pub struct App {
     /// What the deck's clock and bar counter last showed, so the view rebuilds only when they
     /// change rather than on every tick.
     shown: (u32, u32, i32, u16),
+    /// Imports still running, with the tracks each has added so far. They're analysed when
+    /// their import finishes.
+    imports: Vec<(crate::jobs::JobId, crate::import::Added)>,
+    /// Where a file drag from Finder would land right now, for the drop highlight.
+    pub drop_over: Option<DropTarget>,
     /// The iCloud download the deck is waiting on: its job, the track and where to start.
     pub fetch: Option<(crate::jobs::JobId, String, Option<f64>)>,
     /// The job whose log is open in the Activity panel.
@@ -110,6 +126,8 @@ impl App {
             quantize: true,
             zoom_secs: 4.0,
             glides: std::cell::RefCell::new(None),
+            imports: Vec::new(),
+            drop_over: None,
             shown: (0, 0, 0, 0),
             fetch: None,
             log_open: None,
@@ -295,7 +313,17 @@ impl App {
         }
         let live: Vec<_> = self.jobs.list().iter().map(|j| j.id).collect();
         self.export_targets.retain(|id, _| live.contains(id));
-        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Analysis | JobKind::Edit)) {
+        // Every song an import added gets analysed straight away, in a job of its own.
+        let imported: Vec<_> = self.imports.extract_if(.., |(job, _)| finished.iter().any(|(f, _)| f == job)).collect();
+        for (job, added) in imported {
+            let tracks = std::mem::take(&mut *added.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+            let completed = matches!(self.jobs.get(job).map(|j| &j.phase), Some(crate::jobs::Phase::Done { outcome: crate::jobs::Outcome::Completed(_), .. }));
+            if completed && !tracks.is_empty() {
+                let title = if tracks.len() == 1 { format!("Analysing {}", tracks[0].title) } else { format!("Analysing {} new songs", tracks.len()) };
+                self.spawn_analysis(title, tracks);
+            }
+        }
+        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Analysis | JobKind::Edit | JobKind::Import)) {
             self.start_reload();
         }
         // Keep "running 0:42" in the Activity panel ticking.
@@ -445,6 +473,37 @@ impl App {
         }
     }
 
+    fn spawn_analysis(&mut self, title: String, tracks: Vec<crate::analysis::Track>) {
+        let Some(l) = self.loaded() else { return };
+        let store = l.store.clone();
+        self.jobs.spawn(JobKind::Analysis, title, move |rep| crate::analysis::run(&store, tracks, rep));
+    }
+
+    /// Adds songs dropped from Finder to the library, and to `playlist` if it's given and is a
+    /// plain playlist. New songs are analysed when the import is done.
+    pub fn import(&mut self, files: Vec<std::path::PathBuf>, playlist: Option<u64>) {
+        self.drop_over = None;
+        let Some(l) = self.loaded() else { return };
+        let store = l.store.clone();
+        let target = playlist
+            .and_then(|id| self.tree.iter().find(|n| n.id == id && n.kind == crate::library::PlaylistKind::Playlist))
+            .map(|n| crate::import::Target { id: n.id, name: n.name.clone() });
+        let added = crate::import::Added::default();
+        let out = added.clone();
+        let title = target.as_ref().map_or_else(|| "Adding songs".to_owned(), |t| format!("Adding songs to {}", t.name));
+        let job = self.jobs.spawn(JobKind::Import, title, move |rep| crate::import::run(&store, &files, target.as_ref(), &out, rep));
+        self.imports.push((job, added));
+    }
+
+    /// The playlist a drop on the track list goes into: the one on screen, if it's a plain
+    /// playlist rather than a folder or a smart one.
+    pub fn drop_playlist(&self) -> Option<u64> {
+        match self.browse {
+            Browse::Playlist(id) => self.tree.iter().find(|n| n.id == id && n.kind == crate::library::PlaylistKind::Playlist).map(|n| n.id),
+            Browse::Collection => None,
+        }
+    }
+
     pub fn analyse(&mut self) {
         let Some(l) = self.loaded() else { return };
         let rows = self.analyse_rows();
@@ -452,9 +511,8 @@ impl App {
             return;
         }
         let tracks = crate::analysis::tracks(&l.index, &rows);
-        let store = l.store.clone();
         let title = if tracks.len() == 1 { format!("Analysing {}", tracks[0].title) } else { format!("Analysing {} tracks", tracks.len()) };
-        self.jobs.spawn(JobKind::Analysis, title, move |rep| crate::analysis::run(&store, tracks, rep));
+        self.spawn_analysis(title, tracks);
     }
 
     fn sync_wave(&mut self) {
@@ -489,9 +547,8 @@ impl App {
         let Some(row) = self.focused_row() else { return };
         let Some(l) = self.loaded() else { return };
         let tracks = crate::analysis::tracks(&l.index, &[row]);
-        let store = l.store.clone();
         let title = format!("Analysing {}", tracks[0].title);
-        self.jobs.spawn(JobKind::Analysis, title, move |rep| crate::analysis::run(&store, tracks, rep));
+        self.spawn_analysis(title, tracks);
     }
 
     pub fn summary(&self) -> String {

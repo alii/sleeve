@@ -8,11 +8,11 @@ pub mod sidebar;
 pub mod statusbar;
 pub mod tracks;
 
-use rune::{Cx, El, KeyEvent, Spring, Tx, col, row, text};
+use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
 use rune_kit::shell::{self, PaneMotion, SidebarToggle, SplitView, Toolbar};
 use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, TextInput};
 
-use crate::app::{App, LibState};
+use crate::app::{App, DropTarget, LibState};
 use crate::library::Browse;
 
 pub fn kit(dark: bool) -> &'static Kit {
@@ -100,7 +100,46 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
 
-    col().w_full().h_full().fill(c.page).child(split)
+    let mut root = col().w_full().h_full().fill(c.page).child(split);
+    if s.drop_over == Some(DropTarget::Library) {
+        root = root.child(drop_veil(s, k));
+    }
+    // Songs and folders dragged in from Finder land anywhere in the window.
+    root.on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), s.drop_playlist()))
+        .accepts_files(crate::import::accepts)
+        .on_drop_hover(|s: &mut App, over, _| s.drop_over = over.then_some(DropTarget::Library))
+}
+
+/// What a drag over the window shows: the window tinted, and where the songs will go.
+fn drop_veil(s: &App, k: &Kit) -> El {
+    let c = &k.c;
+    let target = s.drop_playlist().and_then(|id| s.tree.iter().find(|n| n.id == id)).map(|n| n.name.clone());
+    let headline = match &target {
+        Some(name) => format!("Add to {name}"),
+        None => "Add to your library".to_owned(),
+    };
+    let card = col()
+        .gap(6.0)
+        .items_center()
+        .px(28.0)
+        .py(22.0)
+        .radius(14.0)
+        .fill(c.layer_01)
+        .border(1.0, c.border_base)
+        .shadow(12.0, 32.0, rune::Color::BLACK.alpha(0.3))
+        .child(rune::icon(&icons::DROP, 28.0).color(c.icon_accent))
+        .child(text(headline).font(k.ty.body_medium).color(c.text_base))
+        .child(text("Drop songs or folders. They'll be analysed straight away.").font(k.ty.small).color(c.text_muted));
+    el().key("drop-veil")
+        .absolute(0.0, 0.0)
+        .w_full()
+        .h_full()
+        .px(10.0)
+        .py(10.0)
+        .inert()
+        .transition(rune::Transition::opacity())
+        .fill(c.page.alpha(0.45))
+        .child(col().w_full().h_full().radius(16.0).fill(c.icon_accent.alpha(0.1)).border(2.0, c.icon_accent.alpha(0.7)).center().child(card))
 }
 
 fn title(s: &App) -> String {

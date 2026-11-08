@@ -375,13 +375,13 @@ fn ext(p: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::jobs::{JobKind, Jobs, Phase};
     use std::time::{Duration, Instant};
 
     /// 30 seconds of kicks at 120 BPM, 44.1 kHz stereo 16-bit.
-    fn click_track(path: &Path) {
+    pub(crate) fn click_track(path: &Path) {
         let rate = 44_100u32;
         let frames = rate * 30;
         let mut data = Vec::with_capacity(frames as usize * 4);
@@ -410,7 +410,7 @@ mod tests {
         std::fs::write(path, wav).unwrap();
     }
 
-    fn setup(name: &str, n: usize) -> (std::path::PathBuf, Arc<Store>) {
+    pub(crate) fn setup(name: &str, n: usize) -> (std::path::PathBuf, Arc<Store>) {
         let dir = std::env::temp_dir().join(format!("sleeve-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -428,7 +428,7 @@ mod tests {
         rbl_index::load(&db).unwrap().0
     }
 
-    fn wait(jobs: &mut Jobs, id: crate::jobs::JobId) -> Phase {
+    pub(crate) fn wait(jobs: &mut Jobs, id: crate::jobs::JobId) -> Phase {
         let start = Instant::now();
         loop {
             let _ = jobs.drain(0.0);

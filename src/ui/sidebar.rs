@@ -4,7 +4,7 @@ use rune::El;
 use rune_kit::Kit;
 use rune_kit::shell::{Sidebar, SidebarRow, SidebarSection};
 
-use crate::app::App;
+use crate::app::{App, DropTarget};
 use crate::library::{Browse, PlaylistKind};
 use crate::ui::icons;
 
@@ -14,10 +14,14 @@ pub fn build(s: &App, k: &Kit) -> El {
         .icon(&icons::COLLECTION)
         .detail(thousands(total))
         .height(30.0)
-        .selected(s.browse == Browse::Collection)
+        .selected(s.browse == Browse::Collection || s.drop_over == Some(DropTarget::Collection))
         .on_select(|s: &mut App, tx| s.browse_to(Browse::Collection, tx))
         .build(k)
-        .key("nav-collection");
+        .key("nav-collection")
+        // Dropped here, songs go into the library and no playlist, whatever's on screen.
+        .on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), None))
+        .accepts_files(crate::import::accepts)
+        .on_drop_hover(|s: &mut App, over, _| s.drop_over = over.then_some(DropTarget::Collection));
 
     let rows = s.tree.iter().map(|n| {
         let id = n.id;
@@ -30,7 +34,7 @@ pub fn build(s: &App, k: &Kit) -> El {
             .icon(icon)
             .depth(n.depth)
             .height(28.0)
-            .selected(s.browse == Browse::Playlist(id))
+            .selected(s.browse == Browse::Playlist(id) || s.drop_over == Some(DropTarget::Playlist(id)))
             .on_select(move |s: &mut App, tx| s.browse_to(Browse::Playlist(id), tx));
         if n.kind == PlaylistKind::Folder {
             // A folder opens or closes on a double click and selects on a single one, as Finder's
@@ -44,9 +48,17 @@ pub fn build(s: &App, k: &Kit) -> El {
         } else if n.kind == PlaylistKind::Playlist {
             row = row.detail(n.count.to_string());
         }
-        row.build(k).key(format!("nav-pl-{id}")).on_secondary_press(move |s: &mut App, press, tx: &mut rune::Tx| {
+        let row = row.build(k).key(format!("nav-pl-{id}")).on_secondary_press(move |s: &mut App, press, tx: &mut rune::Tx| {
             crate::ui::menus::playlist_menu(s, id, press, tx);
-        })
+        });
+        // Songs dropped on a playlist go into the library and into that playlist.
+        if n.kind == PlaylistKind::Playlist {
+            row.on_drop_files(move |s: &mut App, files, _| s.import(files.to_vec(), Some(id)))
+                .accepts_files(crate::import::accepts)
+                .on_drop_hover(move |s: &mut App, over, _| s.drop_over = over.then_some(DropTarget::Playlist(id)))
+        } else {
+            row
+        }
     });
     let playlists = SidebarSection::new("Playlists")
         .key("nav-playlists")

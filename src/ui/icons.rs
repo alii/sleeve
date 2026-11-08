@@ -63,3 +63,9 @@ pub static CLOUD: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M4.75 12.25H11.5C12.88 12.25 14 11.13 14 9.75C14 8.45 13.01 7.38 11.74 7.26C11.4 5.4 9.78 4 7.83 4C6.03 4 4.5 5.2 4.03 6.85C2.86 7.17 2 8.24 2 9.5C2 11.02 3.23 12.25 4.75 12.25Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
 };
+
+pub static DROP: Icon = Icon {
+    name: "sleeve-drop",
+    view: 16.0,
+    body: r#"<path d="M8 2.5V9.5M5.25 6.75L8 9.5L10.75 6.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2.75 9.75V11.75C2.75 12.3 3.2 12.75 3.75 12.75H12.25C12.8 12.75 13.25 12.3 13.25 11.75V9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
+};

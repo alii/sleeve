@@ -3,6 +3,7 @@ mod app;
 mod deck;
 mod demo;
 mod icloud;
+mod import;
 mod export;
 mod scenes;
 mod store;
