@@ -1,0 +1,30 @@
+[package]
+name = "sleeve"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+description = "A fast, good-looking app for your rekordbox library."
+repository = "https://github.com/alii/sleeve"
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69", features = ["native-file-dialog"] }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
+rbl-core = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-db = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-index = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-anlz = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-audio = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-analysis = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-export = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-devices = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-deck = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
