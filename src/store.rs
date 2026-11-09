@@ -51,7 +51,7 @@ impl Store {
     pub fn new(location: LibraryLocation) -> Store {
         // A demo library's backups go beside it, never among the real library's.
         let dir = if location.is_real_install {
-            dirs_home().join("Library/Application Support/Sleeve/Backups")
+            app_dir().join("Backups")
         } else {
             location.share_root.with_file_name("sleeve-backups")
         };
@@ -80,6 +80,13 @@ impl Store {
     }
 }
 
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from)
+/// Where Sleeve keeps its own files: Application Support on a Mac, `Documents\Sleeve` on Windows.
+#[cfg(not(windows))]
+fn app_dir() -> PathBuf {
+    std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from).join("Library/Application Support/Sleeve")
+}
+
+#[cfg(windows)]
+fn app_dir() -> PathBuf {
+    dirs::document_dir().unwrap_or_else(std::env::temp_dir).join("Sleeve")
 }
