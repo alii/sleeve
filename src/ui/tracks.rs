@@ -11,31 +11,39 @@ pub const INSET: f32 = 12.0;
 
 use crate::app::App;
 use crate::library;
+use crate::metadata::Field;
 
 /// Columns in the order they're shown, with the room each needs and its priority. When the
 /// list is narrow, the lowest priorities (highest numbers) go first.
-fn columns() -> Vec<(TableColumn, f32, u8)> {
+/// A filtered column's title gets a dot, so it's clear the list is narrowed by it.
+fn columns(s: &App) -> Vec<(TableColumn, f32, u8)> {
+    let t = |id: &str, title: &str| if s.filters.is_on(id) { format!("{title} ●") } else { title.to_owned() };
+    // The narrow columns get room for the dot, so the title doesn't truncate to "BP...".
+    let dot = |id: &str| if s.filters.is_on(id) { 14.0 } else { 0.0 };
     vec![
         (TableColumn::new("title", "Title").flex(2.4).min(150.0).sortable(), 150.0, 0),
-        (TableColumn::new("artist", "Artist").flex(1.5).min(90.0).sortable(), 90.0, 1),
-        (TableColumn::new("genre", "Genre").flex(0.9).min(64.0).max(220.0).sortable(), 64.0, 5),
-        (TableColumn::new("bpm", "BPM").width(64.0).min(56.0).max(90.0).align(Align::End).sortable(), 64.0, 2),
-        (TableColumn::new("key", "Key").width(56.0).min(48.0).max(90.0).align(Align::Center).sortable(), 56.0, 2),
+        (TableColumn::new("artist", t("artist", "Artist")).flex(1.5).min(90.0).sortable(), 90.0, 1),
+        (TableColumn::new("album", t("album", "Album")).flex(1.2).min(80.0).sortable(), 80.0, 3),
+        (TableColumn::new("genre", t("genre", "Genre")).flex(0.9).min(64.0).max(220.0).sortable(), 64.0, 5),
+        (TableColumn::new("bpm", t("bpm", "BPM")).width(64.0 + dot("bpm")).min(56.0).max(90.0).align(Align::End).sortable(), 64.0, 2),
+        (TableColumn::new("key", t("key", "Key")).width(56.0 + dot("key")).min(48.0).max(90.0).align(Align::Center).sortable(), 56.0, 2),
         (TableColumn::new("time", "Time").width(58.0).min(52.0).max(90.0).align(Align::End).sortable(), 58.0, 3),
-        (TableColumn::new("rating", "Rating").width(78.0).resizable(false).sortable(), 78.0, 4),
+        (TableColumn::new("rating", t("rating", "Rating")).width(78.0 + dot("rating")).resizable(false).sortable(), 78.0, 4),
         (TableColumn::new("added", "Added").width(104.0).min(96.0).max(140.0).sortable(), 104.0, 6),
     ]
 }
 
 pub fn build(s: &App, width: f32, k: &Kit) -> El {
     let kit = k.clone();
-    let mut cols = columns();
+    let mut cols = columns(s);
     // Drop the least important column until the rest fit, cell padding included.
     let need = |cols: &[(TableColumn, f32, u8)]| cols.iter().map(|c| c.1 + 2.0 * INSET).sum::<f32>();
     while need(&cols) > width && cols.len() > 2 {
         let drop = cols.iter().enumerate().max_by_key(|(_, c)| c.2).map_or(0, |(i, _)| i);
         cols.remove(drop);
     }
+    // Remembered for the filter popover, which opens under its column's header when it's shown.
+    *s.shown_columns.borrow_mut() = cols.iter().map(|c| c.0.id().to_owned()).collect();
     let base = Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.rows.len(), |s: &App, i| Cow::Owned(s.track_id(i)))
         .name("Tracks")
         .style(TableStyle { cell_pad: INSET, ..TableStyle::from_kit(k) });
@@ -44,15 +52,43 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .fold(base, |t, c| t.column(c.0))
         .cell(move |s: &App, i, col| cell(s, i, col, &kit))
         .on_sort(|s: &mut App, col, dir, _| s.set_sort(col, dir))
-        .on_select(|s: &mut App, _, _| s.sync_artwork())
+        .on_select(|s: &mut App, id, tx| {
+            s.sync_artwork();
+            s.track_clicked(id, tx);
+        })
+        // A double click (or Return) puts the track on the deck, as in rekordbox. It's not a
+        // click to edit, so a cell waiting to turn into a field stays as it is.
+        .on_open(|s: &mut App, id, tx| {
+            s.edit_armed = None;
+            // A slow double click may have opened the field already: it's a load, not an edit.
+            if s.editing.as_ref().is_some_and(|e| e.id == id && !e.in_panel) {
+                s.cancel_edit();
+            }
+            s.load_track(id, tx);
+        })
         .build(s, k)
         .key("tracks")
         .grow(1.0)
         .min_h(0.0);
-    col().key("tracks-area").w_full().grow(1.0).min_h(0.0).child(table).on_secondary_press(|_: &mut App, press, tx: &mut Tx| {
+    col()
+        .key("tracks-area")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(table)
+        // With a row clicked, the table has focus and the window's own shortcuts are skipped:
+        // Rune would take Space as a press on the table. Keys the table doesn't use (Space, C,
+        // 1 to 8...) come up here first, so they go to the same shortcuts as everywhere else.
+        .on_key(|s: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| crate::ui::on_key(s, ev, tx))
+        .on_secondary_press(|_: &mut App, press, tx: &mut Tx| {
         // Right-clicking a row that isn't selected selects it first, as Finder does, so the menu
         // always acts on what's highlighted.
         tx.element_at(press.x, press.y, move |s: &mut App, picked, tx| {
+            // On a column's header: that column's filter.
+            if let Some(col) = picked.as_ref().and_then(|p| column_of_path(p.path())) {
+                crate::ui::filters::header_pressed(s, &col, press, tx);
+                return;
+            }
             if let Some(id) = picked.as_ref().and_then(|p| row_of_path(p.path()))
                 && !s.table.is_selected(&id)
             {
@@ -60,9 +96,16 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
                 s.table.select(id);
                 s.sync_artwork();
             }
-            crate::ui::menus::track_menu(s, press, tx);
+            crate::ui::menus::track_menu(s, press);
         });
     })
+}
+
+/// The column id in an element path inside the table's header: the segment after `header`.
+fn column_of_path(path: &str) -> Option<String> {
+    let mut parts = path.split('/');
+    parts.by_ref().find(|p| *p == "header")?;
+    parts.next().filter(|id| !id.is_empty() && *id != "rule").map(str::to_owned)
 }
 
 /// The track id in an element path inside the table: the segment after `rows`.
@@ -75,21 +118,10 @@ fn row_of_path(path: &str) -> Option<String> {
 fn cell(s: &App, i: usize, col: &str, k: &Kit) -> Cell {
     let (Some(l), Some(&row_ix)) = (s.loaded(), s.rows.get(i)) else { return Cell::text("") };
     let f = library::fields(&l.index, row_ix);
+    if let Some(field) = Field::of_column(col) {
+        return Cell::el(editable_cell(s, row_ix, field, &f, k));
+    }
     match col {
-        "title" => {
-            // The colour follows the title, so titles line up with their header.
-            let mut cell = row().w_full().gap(6.0).center_y().min_w(0.0).child(text(f.title.to_owned()).font(k.ty.ui).color(k.c.text_base).truncate().shrink());
-            if let Some(ink) = track_color(f.color) {
-                cell = cell.child(el().size(6.0, 6.0).radius(3.0).fill(ink));
-            }
-            if s.evicted.contains(&row_ix) {
-                cell = cell.child(rune::icon(&crate::ui::icons::CLOUD, 13.0).color(k.c.icon_faint).help("In iCloud. It downloads when you play it."));
-            }
-            Cell::el(cell)
-        }
-        "artist" => Cell::text(f.artist),
-        "album" => Cell::text(f.album).muted(),
-        "genre" => Cell::text(f.genre).muted(),
         "bpm" => Cell::el(num(library::bpm(f.bpm_x100), k.c.text_base, k)),
         "key" => match camelot(f.key, k.dark) {
             Some((label, ink)) => Cell::el(key_pill(label, ink, k)),
@@ -100,6 +132,41 @@ fn cell(s: &App, i: usize, col: &str, k: &Kit) -> Cell {
         "added" => Cell::el(num(f.date_added.to_owned(), k.c.text_muted, k)),
         _ => Cell::text(""),
     }
+}
+
+/// Title, artist, album or genre: a text box while it's being edited, otherwise its value. It
+/// notes when the pointer is over it, so a click on the row knows which column to edit. That
+/// watching never takes the click itself, so selecting and double-clicking work as before.
+fn editable_cell(s: &App, row_ix: rbl_index::Row, field: Field, f: &library::TrackFields<'_>, k: &Kit) -> El {
+    let id = s.loaded().map(|l| l.index.ids[row_ix as usize].to_string()).unwrap_or_default();
+    if s.is_editing(&id, field, false) {
+        return crate::ui::inspector::edit_box(s, k.ty.ui, k);
+    }
+    let stored = match field {
+        Field::Title => f.title,
+        Field::Artist => f.artist,
+        Field::Album => f.album,
+        _ => f.genre,
+    };
+    let value = s.shown(row_ix, field).unwrap_or(stored).to_owned();
+    let ink = if matches!(field, Field::Album | Field::Genre) { k.c.text_muted } else { k.c.text_base };
+    let mut cell = row().w_full().h_full().gap(6.0).center_y().min_w(0.0).child(text(value).font(k.ty.ui).color(ink).truncate().shrink());
+    if field == Field::Title {
+        // The colour follows the title, so titles line up with their header.
+        if let Some(ink) = track_color(f.color) {
+            cell = cell.child(el().size(6.0, 6.0).radius(3.0).fill(ink));
+        }
+        if s.evicted.contains(&row_ix) {
+            cell = cell.child(rune::icon(&crate::ui::icons::CLOUD, 13.0).color(k.c.icon_faint).help("In iCloud. It downloads when you play it."));
+        }
+    }
+    cell.on_hover_change(move |s: &mut App, inside, _| {
+        if inside {
+            s.hover_field = Some(field);
+        } else if s.hover_field == Some(field) {
+            s.hover_field = None;
+        }
+    })
 }
 
 /// Numbers in the UI face with tabular figures, so columns of them line up without the weight

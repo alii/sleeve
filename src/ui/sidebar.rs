@@ -55,8 +55,8 @@ pub fn build(s: &App, k: &Kit) -> El {
                 row = row.detail(n.count.to_string());
             }
         }
-        let row = row.build(k).key(format!("nav-pl-{id}")).on_secondary_press(move |s: &mut App, press, tx: &mut rune::Tx| {
-            crate::ui::menus::playlist_menu(s, id, press, tx);
+        let row = row.build(k).key(format!("nav-pl-{id}")).on_secondary_press(move |s: &mut App, press, _: &mut rune::Tx| {
+            crate::ui::menus::playlist_menu(s, id, press);
         });
         // Songs dropped on a playlist go into the library and into that playlist.
         if n.kind == PlaylistKind::Playlist {
@@ -78,7 +78,7 @@ pub fn build(s: &App, k: &Kit) -> El {
                 .control_size(rune_kit::ControlSize::Small)
                 .label("New playlist or folder")
                 .help("New playlist or folder")
-                .on_press_tx(|_: &mut App, tx| crate::ui::menus::new_menu(tx))
+                .on_press(|s: &mut App| crate::ui::menus::new_menu(s))
                 .build(k)
                 .key("nav-new")
                 // The glyph's right edge lines up with the counts on the rows, not the button's.
@@ -106,8 +106,8 @@ pub fn build(s: &App, k: &Kit) -> El {
         let tracks = d.export.as_ref().map_or(0, |e| e.tracks);
         let help = if tracks > 0 { format!("{} · {tracks} tracks exported", d.file_system) } else { d.file_system.clone() };
         let mount = d.mount.clone();
-        row.build(k).key(format!("nav-stick-{}", d.mount.display())).help(help).on_secondary_press(move |s: &mut App, press, tx: &mut rune::Tx| {
-            crate::ui::menus::stick_menu(s, mount.clone(), press, tx);
+        row.build(k).key(format!("nav-stick-{}", d.mount.display())).help(help).on_secondary_press(move |s: &mut App, press, _: &mut rune::Tx| {
+            crate::ui::menus::stick_menu(s, mount.clone(), press);
         })
     });
     let devices = SidebarSection::new("Devices").key("nav-devices").count(s.sticks.len()).rows(sticks);

@@ -35,6 +35,28 @@ pub struct Player {
     /// Where the playhead was and when, and whether it's moving. The waveforms draw from this
     /// and glide on their own between anchors, so the view needn't rebuild every frame.
     pub anchor: Anchor,
+    /// The volume slider, and whether the speaker button has muted it.
+    pub volume: Volume,
+    pub muted: bool,
+}
+
+/// The volume slider's position, 0 (silent) to 1 (full). Starts full.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volume(pub f32);
+
+impl Default for Volume {
+    fn default() -> Self {
+        Volume(1.0)
+    }
+}
+
+impl Volume {
+    /// The engine's gain for this position. Loudness isn't linear in amplitude: halfway along a
+    /// linear slider still sounds nearly full. Squared, the middle is −12 dB, about half as
+    /// loud. Full is the engine's own starting level, so the slider never pushes into clipping.
+    pub fn gain(self) -> f32 {
+        self.0 * self.0 * rbl_deck::DEFAULT_MASTER_GAIN
+    }
 }
 
 /// A known point on the playhead's path: at `at` it was at `pos` (0 to 1), moving at normal
@@ -116,6 +138,11 @@ impl Player {
             self.opening = None;
             match opened {
                 Ok((e, errors)) => {
+                    // The slider may have moved before the output opened. The timing runs keep
+                    // theirs silent.
+                    if std::env::var_os("SLEEVE_AUTOPLAY").is_none() {
+                        e.master().set_gain(self.gain());
+                    }
                     self.engine = Some(e);
                     self.errors = Some(errors);
                 }
@@ -123,6 +150,28 @@ impl Player {
             }
         }
         self.engine.as_ref()
+    }
+
+    fn gain(&self) -> f32 {
+        if self.muted { 0.0 } else { self.volume.gain() }
+    }
+
+    /// Moves the volume slider (0 to 1). Moving it also unmutes.
+    pub fn set_volume(&mut self, v: f32) {
+        self.volume = Volume(v.clamp(0.0, 1.0));
+        self.muted = false;
+        self.apply_gain();
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.muted ^= true;
+        self.apply_gain();
+    }
+
+    fn apply_gain(&self) {
+        if let Some(e) = &self.engine {
+            e.master().set_gain(self.gain());
+        }
     }
 
     /// Shows a track as playing with no audio behind it, for headless scenes.
@@ -213,6 +262,32 @@ impl Player {
         self.playing = true;
         let from = at.unwrap_or(self.pos);
         self.reanchor(from, true);
+    }
+
+    /// Puts a track on the deck paused at the start, as double-clicking does in rekordbox.
+    pub fn load(&mut self, id: &str, path: PathBuf) {
+        self.error = None;
+        self.fetching = false;
+        self.queued = None;
+        self.track = Some(id.to_owned());
+        self.pos = 0.0;
+        self.pending = None;
+        self.playing = false;
+        self.reanchor(0.0, false);
+        let same = self.loaded.as_deref() == Some(id);
+        if !same {
+            self.request += 1;
+        }
+        let request = self.request;
+        // While the output is still opening, the deck just shows it: playing it loads it then.
+        let Some(engine) = self.engine() else { return };
+        engine.pause(Deck::A);
+        if same {
+            seek(engine, engine.snapshot().a, 0.0);
+        } else {
+            engine.load_as(Deck::A, &path, request);
+            self.loaded = Some(id.to_owned());
+        }
     }
 
     pub fn pause(&mut self) {

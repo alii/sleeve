@@ -1,6 +1,7 @@
 //! The window.
 
 pub mod deck;
+pub mod filters;
 pub mod icons;
 pub mod inspector;
 pub mod menus;
@@ -83,10 +84,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     .on_press(|s: &mut App| s.analyse())
     .build(k)
     .key("analyse");
+    // Overlays (the Filter menu, the filter popover, the confirm dialog) go on one layer above
+    // everything. Made here, as the toolbar's Filter button puts its menu on it.
+    let mut layer = Vec::new();
+    let filter = filters::button(s, k, &mut layer);
     let heading = text(title(s)).key("toolbar-title").font(k.ty.body_medium).color(c.text_base).truncate().shrink();
     let toolbar = Toolbar::new()
         .leading(heading)
-        .trailing(row().gap(8.0).center_y().child(analyse).child(search).child(inspector_toggle));
+        .trailing(row().gap(8.0).center_y().child(analyse).child(filter).child(search).child(inspector_toggle));
 
     let split = SplitView::new(main)
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar::build(s, k))
@@ -105,8 +110,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if s.drop_over == Some(DropTarget::Library) {
         root = root.child(drop_veil(s, k));
     }
-    let mut layer = Vec::new();
+    menus::build(s, cx.window_layout("nav-new"), k, &mut layer);
     confirm(s, k, &mut layer);
+    filters::popover(s, k, &mut layer);
     root = root.children(layer);
     // Songs and folders dragged in from Finder land anywhere in the window.
     root.on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), s.drop_playlist()))
@@ -200,6 +206,20 @@ fn title(s: &App) -> String {
 fn empty(s: &App, k: &Kit) -> El {
     let c = &k.c;
     let searching = !s.search.text.trim().is_empty();
+    // Filters hide every row: with the list gone, its headers are too, so the way out is here.
+    if !s.base_rows.is_empty() && !s.filters.is_empty() {
+        let clear = Button::new("Clear filters").variant(ButtonVariant::Neutral).on_press(|s: &mut App| s.clear_filters()).build(k).key("empty-clear-filters");
+        return centred(
+            col()
+                .key("empty")
+                .gap(8.0)
+                .items_center()
+                .max_w(360.0)
+                .child(rune::icon(&icons::FILTER, 22.0).color(c.icon_faint))
+                .child(text("No tracks match the filters").font(k.ty.ui_medium).color(c.text_base))
+                .child(clear),
+        );
+    }
     let (head, tip) = match s.browse {
         _ if searching => ("Nothing matches your search".to_owned(), "Try fewer words, or clear the search.".to_owned()),
         Browse::Playlist(_) if s.drop_playlist().is_some() => ("This playlist is empty".to_owned(), "Drag songs here from Finder, or right-click songs in your collection and choose Add to.".to_owned()),
@@ -251,6 +271,11 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
             }
             rune::Key::Text(t) if t == "=" || t == "+" => {
                 s.zoom(-1);
+                return true;
+            }
+            // C saves a memory cue at the playhead, as in rekordbox.
+            rune::Key::Text(t) if t.eq_ignore_ascii_case("c") => {
+                s.memory_cue();
                 return true;
             }
             _ => {}
