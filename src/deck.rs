@@ -10,6 +10,12 @@ use crate::app::App;
 /// The deck waveform's pixels. Wide enough to stay sharp on a full-width panel at 2×.
 pub const WAVE_PX: (usize, usize) = (2400, 160);
 
+/// Two memory cues closer than this are the same one: pressing C twice doesn't make a pair.
+const MEMORY_CUE_GAP_MS: u32 = 50;
+
+/// rekordbox keeps at most this many memory cues on a track.
+pub const MAX_MEMORY_CUES: usize = 8;
+
 /// Hot cue slots A to H, as rekordbox numbers them in `djmdCue.Kind`: 1, 2, 3, then 5 on (4 is
 /// the active memory loop).
 pub fn kind_of_slot(slot: u8) -> u8 {
@@ -138,6 +144,27 @@ impl App {
         tx.wake_after(std::time::Duration::from_millis(33));
     }
 
+    /// Puts a track on the deck, paused at the start, ready to play. What a double click on a
+    /// row does.
+    pub fn load_track(&mut self, id: &str, tx: &mut Tx) {
+        // Already on the deck: leave it playing (or paused) where it is.
+        if self.player.is_on(id) {
+            return;
+        }
+        let Some(l) = self.loaded() else { return };
+        let Some(row) = l.index.row_of(id) else { return };
+        if self.evicted.contains(&row) {
+            // In iCloud: it downloads, then plays, as a click on play does.
+            self.play_track(id, None, tx);
+            return;
+        }
+        let path = std::path::PathBuf::from(l.index.folder_path.get(row as usize));
+        self.cancel_fetch();
+        self.player.load(id, path);
+        self.sync_deck_wave();
+        tx.wake_after(std::time::Duration::from_millis(33));
+    }
+
     /// Stops the download the deck was waiting on, if any.
     pub fn cancel_fetch(&mut self) {
         if let Some((job, _, _)) = self.fetch.take() {
@@ -168,10 +195,19 @@ impl App {
             return;
         }
         let Some(row) = l.index.row_of(&id) else { return };
-        let pixels = self.deck_wave.as_ref().filter(|w| w.id == id).map_or_else(Pixels::new, |w| w.pixels.clone());
         let rel = l.index.analysis_path.get(row as usize).to_owned();
-        crate::waveform::load_into(pixels.clone(), l.location.share_root.clone(), rel.clone(), WAVE_PX.0, WAVE_PX.1);
-        let art = self.artwork_for(row, 88.0);
+        let share = l.location.share_root.clone();
+        // The same track after a reload (a cue saved, say) keeps showing what it had until the
+        // fresh copies land, so nothing blanks for a moment.
+        let prev = self.deck_wave.take().filter(|w| w.id == id);
+        let pixels = prev.as_ref().map_or_else(Pixels::new, |w| w.pixels.clone());
+        crate::waveform::load_into(pixels.clone(), share, rel.clone(), WAVE_PX.0, WAVE_PX.1);
+        let art = match prev.as_ref().and_then(|w| w.art.clone()) {
+            Some(art) => Some(art),
+            None => self.artwork_for(row, 88.0),
+        };
+        let (beats, detail) = prev.map_or_else(|| (Vec::new(), None), |w| (w.beats, w.detail));
+        let Some(l) = self.loaded() else { return };
         // The grid and the zoomed waveform are read on a worker, never here: the disk may be
         // slow, and the window must keep drawing. They land in `poll`.
         let (tx, rx) = std::sync::mpsc::channel();
@@ -186,7 +222,7 @@ impl App {
             }
         });
         self.deck_grid_rx = Some(rx);
-        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats: Vec::new(), detail: None });
+        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats, detail });
     }
 
     /// Takes the grid and zoomed waveform once the worker has read them. Returns true when
@@ -214,8 +250,13 @@ impl App {
 
     /// Hot cues A to H of the deck's track, by slot.
     pub fn deck_hot_cues(&self) -> [Option<Cue>; 8] {
+        self.deck_row().map_or([None; 8], |row| self.hot_cues_of(row))
+    }
+
+    /// A track's hot cues A to H, by slot.
+    pub fn hot_cues_of(&self, row: Row) -> [Option<Cue>; 8] {
         let mut out = [None; 8];
-        if let (Some(l), Some(row)) = (self.loaded(), self.deck_row()) {
+        if let Some(l) = self.loaded() {
             for cue in l.index.cues_of(row) {
                 if let Some(letter) = cue.hot_letter() {
                     let slot = (letter as u8).wrapping_sub(b'A');
@@ -251,6 +292,75 @@ impl App {
         }
     }
 
+    /// A track's memory cues (`Kind` 0, the ones C saves), in time order.
+    pub fn memory_cues_of(&self, row: Row) -> Vec<Cue> {
+        let Some(l) = self.loaded() else { return Vec::new() };
+        let mut cues: Vec<Cue> = l.index.cues_of(row).into_iter().filter(|c| c.kind == 0).collect();
+        cues.sort_by_key(|c| c.position_ms);
+        cues
+    }
+
+    pub fn deck_memory_cues(&self) -> Vec<Cue> {
+        self.deck_row().map_or_else(Vec::new, |row| self.memory_cues_of(row))
+    }
+
+    /// A memory cue picked from a list: on the deck's track it moves the playhead there; any
+    /// other track plays from it.
+    pub fn go_to_cue(&mut self, id: &str, position_ms: u32, tx: &mut Tx) {
+        if self.player.is_on(id) {
+            self.jump_to(position_ms);
+            return;
+        }
+        let Some(l) = self.loaded() else { return };
+        let Some(row) = l.index.row_of(id) else { return };
+        let total = f64::from(l.index.length_sec[row as usize]) * 1000.0;
+        if total > 0.0 {
+            self.play_track(id, Some((f64::from(position_ms) / total).clamp(0.0, 1.0)), tx);
+        }
+    }
+
+    /// Saves a memory cue at the playhead, as C does in rekordbox. With quantise on it lands on
+    /// the nearest beat. A spot that already has one isn't saved twice.
+    pub fn memory_cue(&mut self) {
+        let Some(id) = self.player.track.clone() else { return };
+        let Some(total) = self.deck_duration_ms().filter(|d| *d > 0.0) else { return };
+        let ms = self.snap_ms(self.player.now() * total).round() as u32;
+        let memory = self.deck_memory_cues();
+        if memory.iter().any(|c| c.position_ms.abs_diff(ms) < MEMORY_CUE_GAP_MS) {
+            return;
+        }
+        if memory.len() >= MAX_MEMORY_CUES {
+            // Said in the status bar, as every change's outcome is.
+            let why = format!("This track already has {MAX_MEMORY_CUES} memory cues. Delete one to save another.");
+            self.jobs.spawn(crate::jobs::JobKind::Edit, "Saving a memory cue", move |_| crate::jobs::Outcome::Failed(why));
+            return;
+        }
+        let what = format!("a memory cue at {}", crate::library::duration(ms / 1000));
+        self.write_cue(what, move |w| w.add_cue(&id, 0, ms).map(|_| ()));
+    }
+
+    /// Moves the playhead to a memory cue, leaving it playing or paused.
+    pub fn jump_to(&mut self, position_ms: u32) {
+        let Some(total) = self.deck_duration_ms().filter(|d| *d > 0.0) else { return };
+        self.player.seek((f64::from(position_ms) / total).clamp(0.0, 1.0));
+    }
+
+    /// Deletes one of `row`'s cues, hot or memory.
+    pub fn delete_cue(&mut self, row: Row, cue: Cue) {
+        // An id that didn't parse is read as 0: there's no row to delete by it.
+        if cue.id == 0 {
+            return;
+        }
+        let Some(l) = self.loaded() else { return };
+        let title = l.index.title.get(row as usize).to_owned();
+        let what = match cue.hot_letter() {
+            Some(letter) => format!("hot cue {letter}"),
+            None => format!("the memory cue at {}", crate::library::duration(cue.position_ms / 1000)),
+        };
+        let id = cue.id.to_string();
+        self.change(format!("Deleting {what} on \"{title}\""), format!("Deleted {what}"), move |w| w.delete_cue(&id).map(|_| ()));
+    }
+
     /// The deck track's beat grid, if it has one.
     pub fn deck_beats(&self) -> &[rbl_anlz::Beat] {
         self.deck_wave.as_ref().filter(|w| self.player.is_on(&w.id)).map_or(&[], |w| &w.beats)
@@ -276,6 +386,24 @@ impl App {
     pub fn zoom(&mut self, step: i32) {
         let i = ZOOMS.iter().position(|z| *z >= self.zoom_secs).unwrap_or(3) as i32;
         self.zoom_secs = ZOOMS[(i + step).clamp(0, ZOOMS.len() as i32 - 1) as usize];
+    }
+
+    /// Adds a scroll or pinch to the zoom, in steps: `steps` above 0 zooms in. A mouse wheel's
+    /// notch is a whole step; a trackpad sends many small amounts, which add up to one.
+    pub fn zoom_by(&mut self, steps: f32) {
+        // Turning back the other way starts over, so it never has to undo the first way first.
+        if steps.signum() != self.zoom_gesture.signum() {
+            self.zoom_gesture = 0.0;
+        }
+        self.zoom_gesture += steps;
+        while self.zoom_gesture >= 1.0 {
+            self.zoom(-1);
+            self.zoom_gesture -= 1.0;
+        }
+        while self.zoom_gesture <= -1.0 {
+            self.zoom(1);
+            self.zoom_gesture += 1.0;
+        }
     }
 
     /// `at` (0 to 1 along the deck track) snapped to the grid the same way.
