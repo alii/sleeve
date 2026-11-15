@@ -7,7 +7,9 @@
 # Settings, all optional:
 #   SIGN_IDENTITY   the signing certificate (default: the first "Developer ID Application")
 #   NOTARY_PROFILE  a notarytool keychain profile (default: sleeve-notary). Make one once with
-#                   xcrun notarytool store-credentials sleeve-notary --apple-id … --team-id …
+#                   xcrun notarytool store-credentials sleeve-notary --key AuthKey.p8 --key-id … --issuer …
+#   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER
+#                   an App Store Connect API key to notarize with instead of a profile, as CI does
 #   SKIP_NOTARIZE=1 sign only, for a quick local build
 
 set -eu
@@ -20,6 +22,11 @@ OUT=target/release-macos
 APP="$OUT/$NAME.app"
 DMG="$OUT/$NAME-$VERSION.dmg"
 NOTARY_PROFILE=${NOTARY_PROFILE:-sleeve-notary}
+if [ -n "${NOTARY_KEY:-}" ]; then
+    set -- --key "$NOTARY_KEY" --key-id "${NOTARY_KEY_ID:?}" --issuer "${NOTARY_ISSUER:?}"
+else
+    set -- --keychain-profile "$NOTARY_PROFILE"
+fi
 SIGN_IDENTITY=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)}
 
 if [ -z "$SIGN_IDENTITY" ]; then
@@ -71,20 +78,24 @@ codesign --verify --strict --verbose=2 "$APP"
 # Sends a file to Apple and fails unless Apple accepts it. `--wait` alone exits 0 on a
 # rejection too, so the status is read from its output.
 notarize() {
-    out=$(xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || { echo "$out" >&2; exit 1; }
+    file=$1
+    shift
+    out=$(xcrun notarytool submit "$file" "$@" --wait 2>&1) || { echo "$out" >&2; exit 1; }
     echo "$out"
     if ! echo "$out" | grep -q 'status: Accepted'; then
-        echo "Apple didn't accept $1. See: xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE" >&2
+        echo "Apple didn't accept $file. Its log says why: xcrun notarytool log <id> with the same login." >&2
         exit 1
     fi
 }
 
 can_notarize=0
 if [ "${SKIP_NOTARIZE:-0}" != 1 ]; then
-    if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    if xcrun notarytool history "$@" >/dev/null 2>&1; then
         can_notarize=1
     else
-        echo "No notary profile \"$NOTARY_PROFILE\", so this build won't be notarized." >&2
+        echo "Can't log in to Apple's notary service, so this build won't be notarized." >&2
+        # A release from CI goes to everyone, so there it must be notarized.
+        [ -z "${CI:-}" ] || exit 1
     fi
 fi
 
@@ -93,7 +104,7 @@ fi
 if [ $can_notarize = 1 ]; then
     echo "Notarizing the app…"
     ditto -c -k --keepParent "$APP" "$OUT/$NAME.zip"
-    notarize "$OUT/$NAME.zip"
+    notarize "$OUT/$NAME.zip" "$@"
     xcrun stapler staple "$APP"
     rm "$OUT/$NAME.zip"
 fi
@@ -108,7 +119,7 @@ rm -rf "$STAGE"
 codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
 if [ $can_notarize = 1 ]; then
     echo "Notarizing the DMG…"
-    notarize "$DMG"
+    notarize "$DMG" "$@"
     xcrun stapler staple "$DMG"
     spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 fi

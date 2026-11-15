@@ -1,0 +1,115 @@
+# Every push to main builds Sleeve for Mac and Windows and publishes it as the latest
+# GitHub release. The Mac app is signed with the Developer ID and notarized by Apple. The
+# Windows exe isn't signed, so SmartScreen warns the first time it's opened.
+#
+# Secrets it needs:
+#   MACOS_CERT_P12       the Developer ID Application certificate and its key, as base64
+#   MACOS_CERT_PASSWORD  the .p12's password
+#   ASC_KEY_P8           an App Store Connect API key (the .p8 file's text), for notarizing
+#   ASC_KEY_ID           that key's ID
+#   ASC_ISSUER_ID        the team's issuer ID
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release at a time, in push order.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    # Xcode 26 or newer, for actool to compile the Icon Composer icon.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Set up signing and notarizing
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          # A keychain of its own, which only lives as long as this machine.
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          pass=$(openssl rand -hex 24)
+          security create-keychain -p "$pass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pass" "$kc"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          # Lets codesign use the key without a password prompt no one is there to answer.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$kc" >/dev/null
+          # The existing keychains stay on the list, one word each.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Build, sign and notarize
+        env:
+          NOTARY_KEY: ${{ runner.temp }}/AuthKey.p8
+          NOTARY_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+        run: scripts/release-macos.sh
+
+      - run: mv target/release-macos/Sleeve-*.dmg Sleeve.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: Sleeve.dmg
+          if-no-files-found: error
+
+      - name: Clean up
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - run: pwsh scripts/release-windows.ps1
+      - run: Move-Item target/release-windows/Sleeve-*-windows-x64.zip Sleeve-windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Sleeve-windows.zip
+          if-no-files-found: error
+
+  release:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" Sleeve.dmg Sleeve-windows.zip \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Sleeve build ${{ github.run_number }}" \
+            --generate-notes \
+            --latest

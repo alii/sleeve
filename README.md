@@ -6,23 +6,20 @@ A fast, good-looking app for your rekordbox library. Browse your tracks, analyse
 
 ## Get it
 
-Sleeve runs on a Mac. There's no download yet, so you build it yourself. It takes about five minutes.
+- **Mac:** download [Sleeve.dmg](https://github.com/alii/sleeve/releases/latest/download/Sleeve.dmg), open it and drag Sleeve into Applications.
+- **Windows:** download [Sleeve-windows.zip](https://github.com/alii/sleeve/releases/latest/download/Sleeve-windows.zip), unzip it and open Sleeve.exe. The first time, Windows may say it protected your PC: click **More info**, then **Run anyway**.
 
-1. Open Terminal.
-2. Install Rust, then open a new Terminal window:
-   ```sh
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-3. Get Sleeve and open it:
+A new version comes out every time the code changes. See [all releases](https://github.com/alii/sleeve/releases).
+
+### Build it yourself
+
+1. Install Rust from [rustup.rs](https://rustup.rs).
+2. Get Sleeve and open it:
    ```sh
    git clone https://github.com/alii/sleeve
    cd sleeve
    cargo run --release
    ```
-
-The first time takes a few minutes. If your Mac asks to install developer tools, say yes, then run step 3 again.
-
-To open it again later, run `cd sleeve && cargo run --release`.
 
 ## Good to know
 
