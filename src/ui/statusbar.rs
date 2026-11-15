@@ -199,10 +199,21 @@ pub fn activity(s: &App, k: &Kit) -> Option<El> {
             rune_kit::Button::new("Open log file")
                 .variant(rune_kit::ButtonVariant::Ghost)
                 .control_size(ControlSize::Small)
-                .help("Opens every job's log in Console")
+                .help(if cfg!(windows) { "Shows every job's log, live, in a PowerShell window" } else { "Opens every job's log in Console" })
                 .on_press(|_: &mut App| {
                     if let Some(p) = crate::jobs::log_path() {
+                        #[cfg(not(windows))]
                         let _ = std::process::Command::new("open").arg("-a").arg("Console").arg(p).spawn();
+                        // Windows has no Console app, so tail the file in its own PowerShell window.
+                        // In PowerShell's single quotes a ' is written ''.
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            const CREATE_NEW_CONSOLE: u32 = 0x10;
+                            let path = p.display().to_string().replace('\'', "''");
+                            let script = format!("$Host.UI.RawUI.WindowTitle = 'Sleeve activity log'; Get-Content -LiteralPath '{path}' -Encoding UTF8 -Tail 200 -Wait");
+                            let _ = std::process::Command::new("powershell").args(["-NoProfile", "-NoExit", "-Command", &script]).creation_flags(CREATE_NEW_CONSOLE).spawn();
+                        }
                     }
                 })
                 .build(k)

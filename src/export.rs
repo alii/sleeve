@@ -63,8 +63,11 @@ static CACHE: LazyLock<Option<rbl_export::cache::PreparationCache>> = LazyLock::
     if cfg!(test) {
         return None;
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let cache = rbl_export::cache::PreparationCache::new(home.join("Library/Caches/Sleeve/usb-export"));
+    #[cfg(not(windows))]
+    let dir = std::env::var_os("HOME").map(PathBuf::from)?.join("Library/Caches/Sleeve/usb-export");
+    #[cfg(windows)]
+    let dir = dirs::data_local_dir()?.join("Sleeve\\Cache\\usb-export");
+    let cache = rbl_export::cache::PreparationCache::new(dir);
     let _ = cache.prune(CACHE_BUDGET);
     Some(cache)
 });

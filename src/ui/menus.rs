@@ -53,9 +53,10 @@ pub fn track_menu(s: &App, at: PointerPress, tx: &mut Tx) {
         Browse::Playlist(id) => s.tree.iter().find(|p| p.id == id).map(|p| (id, p.name.clone(), p.kind)),
         Browse::Collection => None,
     };
+    let reveal = if cfg!(windows) { "Show in Explorer" } else { "Show in Finder" };
     let mut menu = PopupMenu::new()
         .item(PopupItem::new("analyse", if analyse == 1 { "Analyse 1 track".to_owned() } else { format!("Analyse {analyse} tracks") }).symbol("waveform").enabled(analyse > 0))
-        .item(PopupItem::new("finder", "Show in Finder").symbol("folder").enabled(n > 0))
+        .item(PopupItem::new("finder", reveal).symbol("folder").enabled(n > 0))
         .separator()
         .submenu(format!("Add {these} to"), playlist_picker(s, current.as_ref().map(|c| c.0)));
     if let Some((_, name, PlaylistKind::Playlist)) = &current {

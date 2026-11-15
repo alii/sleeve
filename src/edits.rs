@@ -206,12 +206,21 @@ impl App {
         self.change(format!("Removing {n} from your library"), format!("Removed {n} from your library"), move |w| w.delete_tracks(&tracks).map(|_| ()));
     }
 
-    /// Shows the focused track's file in Finder.
+    /// Shows the focused track's file in Finder, or in Explorer on Windows.
     pub fn show_in_finder(&self) {
         let Some(l) = self.loaded() else { return };
         let Some(row) = self.focused_row() else { return };
         let path = l.index.folder_path.get(row as usize).to_owned();
+        #[cfg(not(windows))]
         let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+        // Explorer needs `/select,"C:\path"` exactly (hence `raw_arg`) and backslashes, but
+        // rekordbox stores `C:/...`.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let path = path.replace('/', "\\");
+            let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{path}\"")).spawn();
+        }
     }
 
     /// Ejects a USB stick, as a job: it can take a moment, and it fails if something has a file

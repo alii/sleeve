@@ -4,6 +4,7 @@
 //! only: tracks still decoding give up at their next chunk and write nothing, and tracks
 //! already saved stay saved.
 
+use std::io::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -328,8 +329,12 @@ impl FileSwap {
                     std::fs::create_dir_all(dir)?;
                 }
                 let tmp = path.with_extension(format!("{}.sleeve-new", ext(path)));
-                std::fs::write(&tmp, &data)?;
-                std::fs::File::open(&tmp)?.sync_all()?;
+                // Flushed through the handle that wrote it: Windows refuses `sync_all` on a
+                // read-only one.
+                let mut file = std::fs::File::create(&tmp)?;
+                file.write_all(&data)?;
+                file.sync_all()?;
+                drop(file);
                 let old = path.exists().then(|| path.with_extension(format!("{}.sleeve-old", ext(path))));
                 if let Some(old) = &old {
                     std::fs::rename(path, old)?;

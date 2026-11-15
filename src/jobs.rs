@@ -10,7 +10,7 @@
 //!
 //! Every job keeps a log: when it started, each step it took, every problem with the file and
 //! the system error behind it, when stop was pressed and how it ended. The Activity panel shows
-//! it, and each line also goes to `~/Library/Logs/Sleeve/activity.log`.
+//! it, and each line also goes to the file at `log_path()`.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -134,9 +134,15 @@ impl LogFile {
     }
 }
 
-/// Where the log file lives on this Mac.
+/// Where the log file lives: `~/Library/Logs/Sleeve` on a Mac, `%LOCALAPPDATA%\Sleeve\Logs` on Windows.
+#[cfg(not(windows))]
 pub fn log_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Logs/Sleeve/activity.log"))
+}
+
+#[cfg(windows)]
+pub fn log_path() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("Sleeve\\Logs\\activity.log"))
 }
 
 /// Writes log lines for one job from any thread. Cheap to clone, so analysis can hand one to
@@ -519,16 +525,26 @@ struct Tm {
     tm_zone: usize,
 }
 
+#[cfg(not(windows))]
 unsafe extern "C" {
     fn localtime_r(t: *const i64, out: *mut Tm) -> *mut Tm;
+}
+
+#[cfg(windows)]
+unsafe extern "C" {
+    fn _localtime64_s(out: *mut Tm, t: *const i64) -> i32;
 }
 
 fn local_now() -> (Tm, u32) {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = now.as_secs() as i64;
     let mut tm = Tm::default();
-    // SAFETY: both pointers are to live locals of the right type; localtime_r is thread-safe.
+    // SAFETY: both pointers are to live locals of the right type, and both functions are
+    // thread-safe. Windows' `tm` is just the first nine fields, so the rest stay zero.
+    #[cfg(not(windows))]
     unsafe { localtime_r(&secs, &mut tm) };
+    #[cfg(windows)]
+    unsafe { _localtime64_s(&mut tm, &secs) };
     (tm, now.subsec_millis())
 }
 

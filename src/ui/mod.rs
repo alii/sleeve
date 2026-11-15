@@ -131,7 +131,7 @@ fn confirm(s: &App, k: &Kit, layer: &mut Vec<El>) {
         }
         Confirm::RemoveTracks(ids) => (
             format!("Remove {} from your library?", songs(ids.len())),
-            "They come out of every playlist too, and lose their cues and analysis. The files stay where they are on your Mac.".to_owned(),
+            "They come out of every playlist too, and lose their cues and analysis. The files stay where they are on your computer.".to_owned(),
             "Remove",
         ),
     };
@@ -153,7 +153,10 @@ fn confirm(s: &App, k: &Kit, layer: &mut Vec<El>) {
                 .build(k)
                 .key("confirm-ok"),
         );
-    Dialog::new("confirm", title).description(about).width(420.0).fit().open(true).on_close(|s: &mut App| s.confirm = None).child(buttons).build(k, layer);
+    // The explanation goes in the body rather than `.description()`, which rune_kit draws on one
+    // line, so a long one runs off the dialog. Pulled up to sit just under the title.
+    let about = col().w_full().px(16.0).mt(-12.0).pb(16.0).child(text(about).font(k.ty.ui.lh(20.0)).color(k.c.text_muted).w_full().wrap());
+    Dialog::new("confirm", title).width(420.0).fit().open(true).on_close(|s: &mut App| s.confirm = None).child(about).child(buttons).build(k, layer);
 }
 
 /// What a drag over the window shows: the window tinted, and where the songs will go.
