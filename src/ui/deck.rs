@@ -310,7 +310,7 @@ fn pad(slot: usize, cue: Option<rbl_index::Cue>, total_ms: f64, k: &Kit) -> El {
         Some(cue) => base
             .fill(ink)
             .label(format!("Hot cue {letter} at {}", at(cue.position_ms)))
-            .help(format!("Jump to hot cue {letter} · {} · press {}", at(cue.position_ms), slot + 1))
+            .help(format!("Jump to hot cue {letter} · {} · press {} · Shift-click to delete", at(cue.position_ms), slot + 1))
             .child(text(letter).font(k.ty.small_medium).color(oklch(0.2, 0.02, 0.0))),
         None => base
             .border(1.0, c.border_base)
@@ -320,7 +320,8 @@ fn pad(slot: usize, cue: Option<rbl_index::Cue>, total_ms: f64, k: &Kit) -> El {
     };
     let _ = total_ms;
     k.interactive(pad)
-        .on_press_tx(move |s: &mut App, tx| s.hot_cue(slot8, tx))
+        // Shift is the delete modifier, as on a controller's pads. On an empty pad it does nothing.
+        .on_press_tx(move |s: &mut App, tx| if tx.mods().shift { s.delete_hot_cue(slot8) } else { s.hot_cue(slot8, tx) })
         .on_secondary_press(move |s: &mut App, press, _: &mut Tx| crate::ui::menus::cue_menu(s, slot8, press))
 }
 
