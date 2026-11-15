@@ -1,8 +1,8 @@
 //! The sidebar: the collection, the playlist tree and the sticks plugged in.
 
-use rune::El;
+use rune::{El, col};
 use rune_kit::Kit;
-use rune_kit::shell::{Sidebar, SidebarRow, SidebarSection};
+use rune_kit::shell::{Sidebar, SidebarHeader, SidebarRow, SidebarSection};
 
 use crate::app::{App, DropTarget};
 use crate::library::{Browse, PlaylistKind};
@@ -67,8 +67,7 @@ pub fn build(s: &App, k: &Kit) -> El {
             row
         }
     });
-    let playlists = SidebarSection::new("Playlists")
-        .key("nav-playlists")
+    let header = SidebarHeader::new("Playlists")
         .count(s.tree.iter().filter(|n| n.kind != PlaylistKind::Folder).count())
         .collapsed(s.playlists_closed)
         .on_toggle(|s: &mut App, _| s.playlists_closed ^= true)
@@ -84,7 +83,11 @@ pub fn build(s: &App, k: &Kit) -> El {
                 // The glyph's right edge lines up with the counts on the rows, not the button's.
                 .mr(-4.5),
         )
-        .rows(rows);
+        .build(k)
+        // Without Rune's 4 points of top padding, which puts the title below the middle of the hover fill.
+        .pt(0.0);
+    let rows = (!s.playlists_closed).then_some(rows).into_iter().flatten();
+    let playlists = col().key("nav-playlists").role("group").label("Playlists").w_full().gap(2.0).motion(k.motion.disclosure).child(header).children(rows);
 
     let sticks = s.sticks.iter().map(|d| {
         let busy = s.exporting_to(&d.mount);
@@ -112,7 +115,7 @@ pub fn build(s: &App, k: &Kit) -> El {
     });
     let devices = SidebarSection::new("Devices").key("nav-devices").count(s.sticks.len()).rows(sticks);
     // The same 8 points either side as the gap around the main panel.
-    let mut sb = Sidebar::new().label("Library").inset(0.0).header(collection).section(playlists);
+    let mut sb = Sidebar::new().label("Library").inset(0.0).header(collection).child(playlists);
     if !s.sticks.is_empty() {
         sb = sb.section(devices);
     }
