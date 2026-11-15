@@ -68,9 +68,15 @@ echo "Signing with ${SIGN_IDENTITY}…"
 codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 
+# Sends a file to Apple and fails unless Apple accepts it. `--wait` alone exits 0 on a
+# rejection too, so the status is read from its output.
 notarize() {
-    xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
-    xcrun stapler staple "$1"
+    out=$(xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1) || { echo "$out" >&2; exit 1; }
+    echo "$out"
+    if ! echo "$out" | grep -q 'status: Accepted'; then
+        echo "Apple didn't accept $1. See: xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE" >&2
+        exit 1
+    fi
 }
 
 can_notarize=0
@@ -103,6 +109,7 @@ codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
 if [ $can_notarize = 1 ]; then
     echo "Notarizing the DMG…"
     notarize "$DMG"
+    xcrun stapler staple "$DMG"
     spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 fi
 
