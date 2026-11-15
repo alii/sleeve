@@ -445,10 +445,8 @@ impl App {
     }
 
     pub fn delete_hot_cue(&mut self, slot: u8) {
-        if let Some(cue) = self.deck_hot_cues()[slot as usize] {
-            let id = cue.id.to_string();
-            let what = format!("deleting hot cue {}", char::from(b'A' + slot));
-            self.write_cue(what, move |w| w.delete_cue(&id).map(|_| ()));
+        if let Some((row, cue)) = self.deck_row().zip(self.deck_hot_cues()[slot as usize]) {
+            self.delete_cue(row, cue);
         }
     }
 
