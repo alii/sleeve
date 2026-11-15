@@ -63,6 +63,8 @@ pub struct App {
     pub quantize: bool,
     /// Seconds of track the zoomed waveform shows across its width.
     pub zoom_secs: f64,
+    /// A scroll or pinch on the deck that hasn't yet added up to a whole zoom step.
+    pub zoom_gesture: f32,
     /// The deck's glides for the current anchor, made by the view the first time it draws one.
     pub glides: std::cell::RefCell<Option<crate::ui::deck::Glides>>,
     /// What the deck's clock and bar counter last showed, so the view rebuilds only when they
@@ -76,6 +78,32 @@ pub struct App {
     /// The playlist being renamed in the sidebar, and the field holding its new name.
     pub renaming: Option<u64>,
     pub rename: TextEdit,
+    /// A track's detail being typed in, and its text box.
+    pub editing: Option<crate::metadata::Editing>,
+    pub edit: TextEdit,
+    /// A track list cell that turns into a field at this clock time, unless a double click
+    /// comes first.
+    pub edit_armed: Option<(String, crate::metadata::Field, f64)>,
+    /// The editable track list column under the pointer, and the row clicked last.
+    pub hover_field: Option<crate::metadata::Field>,
+    pub last_clicked: Option<String>,
+    /// Values just saved, shown until the library is read again.
+    pub shown_edits: Vec<crate::metadata::Shown>,
+    /// The column filters, and the rows in view before them (what a filter's list counts).
+    pub filters: crate::filters::Filters,
+    pub base_rows: Vec<Row>,
+    /// The column whose filter is open, its search box, and the BPM range boxes.
+    pub filter_open: Option<String>,
+    /// The Filter button's menu is open.
+    pub filter_menu: bool,
+    /// The right-click (or "+") menu that's open, and where.
+    pub menu: Option<crate::ui::menus::OpenMenu>,
+    pub filter_search: TextEdit,
+    pub bpm_from: TextEdit,
+    pub bpm_to: TextEdit,
+    /// The track list's columns on the last frame: a narrow window hides some, and a filter for
+    /// a hidden one opens under the Filter button instead.
+    pub shown_columns: std::cell::RefCell<Vec<String>>,
     /// A question on screen before something is deleted.
     pub confirm: Option<crate::edits::Confirm>,
     /// A playlist being made, and the id its job hands back.
@@ -140,6 +168,7 @@ impl App {
             deck_wave: None,
             quantize: true,
             zoom_secs: 4.0,
+            zoom_gesture: 0.0,
             glides: std::cell::RefCell::new(None),
             deck_grid_rx: None,
             evicted: HashSet::new(),
@@ -148,6 +177,21 @@ impl App {
             drop_over: None,
             renaming: None,
             rename: TextEdit::new(""),
+            editing: None,
+            edit: TextEdit::new(""),
+            edit_armed: None,
+            hover_field: None,
+            last_clicked: None,
+            shown_edits: Vec::new(),
+            filters: Default::default(),
+            base_rows: Vec::new(),
+            filter_open: None,
+            filter_menu: false,
+            menu: None,
+            filter_search: TextEdit::new(""),
+            bpm_from: TextEdit::new(""),
+            bpm_to: TextEdit::new(""),
+            shown_columns: Default::default(),
             confirm: None,
             created: None,
             rename_next: None,
@@ -366,6 +410,7 @@ impl App {
         if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Analysis | JobKind::Edit | JobKind::Import)) {
             self.start_reload();
         }
+        changed |= self.tick_edit(tx);
         // Keep "running 0:42" in the Activity panel ticking.
         if self.activity_open && self.jobs.list().iter().any(crate::jobs::Job::is_active) {
             tx.wake_after(std::time::Duration::from_secs(1));
@@ -409,6 +454,7 @@ impl App {
         self.refresh_rows();
         self.sync_artwork();
         self.sync_deck_wave();
+        self.settle_shown_edits();
     }
 
     pub fn loaded(&self) -> Option<&Loaded> {
@@ -429,10 +475,15 @@ impl App {
     pub fn refresh_rows(&mut self) {
         let Some(l) = self.loaded() else {
             self.rows.clear();
+            self.base_rows.clear();
             return;
         };
-        let view = library::open_view(&l.index, self.browse, &self.sort.0, self.sort.1, self.search.text.trim());
-        self.rows = view.window(0, view.len()).to_vec();
+        // A cheap copy (an `Arc`), so `l`'s borrow of `self` ends before `self` is changed below.
+        let index = l.index.clone();
+        let view = library::open_view(&index, self.browse, &self.sort.0, self.sort.1, self.search.text.trim());
+        self.base_rows = view.window(0, view.len()).to_vec();
+        // The column filters, on what the playlist and search left. Without any, it's a copy.
+        self.rows = self.base_rows.iter().copied().filter(|&r| self.filters.keeps(&index, r, None)).collect();
     }
 
     pub fn browse_to(&mut self, b: Browse, tx: &mut Tx) {
@@ -588,7 +639,8 @@ impl App {
             self.wave = None;
             return;
         };
-        let pixels = rune::Pixels::new();
+        // The same track after a reload keeps its waveform on screen while it's read again.
+        let pixels = self.wave.as_ref().filter(|w| w.0 == row).map_or_else(rune::Pixels::new, |w| w.2.clone());
         let rel = l.index.analysis_path.get(row as usize).to_owned();
         crate::waveform::load_into(pixels.clone(), l.location.share_root.clone(), rel, crate::ui::inspector::WAVE_PX.0, crate::ui::inspector::WAVE_PX.1);
         self.wave = Some((row, generation, pixels));

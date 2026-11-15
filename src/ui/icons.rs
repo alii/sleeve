@@ -81,3 +81,21 @@ pub static EJECT: Icon = Icon {
     view: 16.0,
     body: r#"<path d="M8 3.25L12.5 8.75H3.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M3.5 11.75H12.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
 };
+
+pub static SPEAKER: Icon = Icon {
+    name: "sleeve-speaker",
+    view: 16.0,
+    body: r#"<path d="M2.75 6.25H5L8.25 3.5V12.5L5 9.75H2.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M10.5 6C11 6.5 11.25 7.2 11.25 8S11 9.5 10.5 10M12.25 4.25C13.2 5.25 13.75 6.55 13.75 8S13.2 10.75 12.25 11.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" fill="none"/>"#,
+};
+
+pub static SPEAKER_MUTED: Icon = Icon {
+    name: "sleeve-speaker-muted",
+    view: 16.0,
+    body: r#"<path d="M2.75 6.25H5L8.25 3.5V12.5L5 9.75H2.75Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/><path d="M10.5 6.25L13.75 9.75M13.75 6.25L10.5 9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#,
+};
+
+pub static FILTER: Icon = Icon {
+    name: "sleeve-filter",
+    view: 16.0,
+    body: r#"<path d="M2.75 3.75H13.25L9.25 8.6V12.5L6.75 13.5V8.6Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#,
+};

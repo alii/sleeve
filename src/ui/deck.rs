@@ -19,6 +19,16 @@ pub fn cue_colour(slot: usize) -> Color {
     oklch(0.72, 0.16, hue)
 }
 
+/// Memory cues are red, as in rekordbox.
+pub fn memory_colour() -> Color {
+    oklch(0.64, 0.21, 25.0)
+}
+
+/// rekordbox's memory cue mark: a small triangle pointing down at the cue's line.
+pub fn memory_mark() -> El {
+    rune::canvas(rune::Shape::new().fill(vec![[0.0, 0.0], [10.0, 0.0], [5.0, 7.0]], memory_colour()).view_box(10.0, 7.0)).size(10.0, 7.0)
+}
+
 /// The panel's dark "screen", the same in both themes, as a player's display is.
 pub fn screen() -> Color {
     oklch(0.17, 0.005, 260.0)
@@ -66,26 +76,36 @@ fn with_glides<T>(s: &App, total_ms: f64, f: impl FnOnce(&mut Glides) -> T) -> T
 /// The zoomed waveform's slide: left at `pps` points a second while the track plays.
 fn slide(s: &App, total_ms: f64, view_w: f32) -> rune::Tween<[f32; 2]> {
     let secs = glide_secs(s, total_ms);
+    let gone = glided(s, secs);
     let pps = view_w / s.zoom_secs as f32;
     with_glides(s, total_ms, |g| {
         g.slides
             .entry((s.zoom_secs.to_bits(), view_w.to_bits()))
-            .or_insert_with(|| rune::Tween::linear([0.0, 0.0], [-pps * secs as f32, 0.0], std::time::Duration::from_secs_f64(secs)))
+            .or_insert_with(|| rune::Tween::linear([-pps * gone as f32, 0.0], [-pps * secs as f32, 0.0], std::time::Duration::from_secs_f64(secs - gone)))
             .clone()
     })
+}
+
+/// How far into the anchor's glide the playhead already is, in seconds. A glide made partway
+/// through an anchor (the zoom changed, the window was resized) starts from here, not from the
+/// anchor itself, or it would trail the music until the next anchor.
+fn glided(s: &App, secs: f64) -> f64 {
+    let a = s.player.anchor;
+    if a.moving { a.at.elapsed().as_secs_f64().min(secs) } else { 0.0 }
 }
 
 /// The playhead, `line` points wide, and its veil across a strip `w` by `h`.
 pub fn head(s: &App, strip: &'static str, total_ms: f64, w: f32, h: f32, line: f32) -> Head {
     let secs = glide_secs(s, total_ms);
+    let gone = glided(s, secs);
     let a = s.player.anchor;
     with_glides(s, total_ms, |g| {
         g.heads
             .entry((strip, w.to_bits(), h.to_bits()))
             .or_insert_with(|| {
-                let x0 = a.pos as f32 * w;
-                let x1 = if total_ms > 0.0 { (a.pos + secs * 1000.0 / total_ms).min(1.0) as f32 * w } else { x0 };
-                let d = std::time::Duration::from_secs_f64(secs);
+                let at = |t: f64| if total_ms > 0.0 { (a.pos + t * 1000.0 / total_ms).min(1.0) as f32 * w } else { a.pos as f32 * w };
+                let (x0, x1) = (at(gone), at(secs));
+                let d = std::time::Duration::from_secs_f64(secs - gone);
                 Head { line: rune::Tween::linear([x0 - line / 2.0, 0.0, line, h], [x1 - line / 2.0, 0.0, line, h], d), played: rune::Tween::linear([0.0, 0.0, x0, h], [0.0, 0.0, x1, h], d) }
             })
             .clone()
@@ -103,6 +123,7 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
     // The readouts show the playhead now; the waveforms glide from the anchor on their own.
     let pos = s.player.now();
     let cues = s.deck_hot_cues();
+    let memory = s.deck_memory_cues();
 
     let art = match s.deck_wave.as_ref().and_then(|w| w.art.as_ref()) {
         Some(img) => el().size(44.0, 44.0).radius(6.0).fill(c.layer_02).pixels(img.pixels()),
@@ -183,8 +204,23 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
         .build(k)
         .key("deck-close");
 
-    let controls = row().key("deck-controls").gap(12.0).center_y().child(pads).child(q);
-    let readouts = row().gap(12.0).center_y().child(counter).child(clock).child(play).child(row().gap(0.0).child(locate).child(close));
+    let red = memory_colour();
+    let mem = row()
+        .key("deck-memory")
+        .h(PAD.1)
+        .px(6.0)
+        .radius(5.0)
+        .center()
+        .role("button")
+        .focusable(true)
+        .cursor(rune::Cursor::Pointer)
+        .border(1.0, red.alpha(0.7))
+        .label("Save a memory cue")
+        .help("Save a memory cue at the playhead · C")
+        .child(text("CUE").font(k.ty.small_medium).color(red));
+    let mem = k.interactive(mem).on_press(|s: &mut App| s.memory_cue());
+    let controls = row().key("deck-controls").gap(12.0).center_y().child(mem).child(pads).child(q);
+    let readouts = row().gap(12.0).center_y().child(counter).child(clock).child(volume(s, k)).child(play).child(row().gap(0.0).child(locate).child(close));
     let lead = row().gap(12.0).center_y().min_w(0.0).shrink().child(art.key("deck-art")).child(names);
     let top = if width >= ONE_ROW_W {
         col().w_full().child(
@@ -195,8 +231,8 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
     };
 
     let strip_w = width - 2.0 * crate::ui::tracks::INSET;
-    let wave = wave(s, &cues, total_ms, strip_w, k);
-    let zoomed = zoomed(s, &cues, total_ms, strip_w, k);
+    let wave = wave(s, &cues, &memory, total_ms, strip_w, k);
+    let zoomed = zoomed(s, &cues, &memory, total_ms, strip_w, k);
 
     Some(
         col()
@@ -207,10 +243,60 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
             .gap(10.0)
             .border_sides([0.0, 0.0, 1.0, 0.0], c.border_muted)
             .transition(Transition::offset(0.0, -8.0))
+            // A clicked button (mute, a pad, CUE) keeps focus, and Rune would take Space as a
+            // press on it. Keys come up here first, so Space still plays and pauses.
+            .on_key(|s: &mut App, ev: &rune::KeyEvent, tx: &mut Tx| crate::ui::on_key(s, ev, tx))
+            // Ctrl (⌘ on a Mac) and the scroll wheel zoom the waveform, up to zoom in; so does a
+            // trackpad pinch. A plain scroll is left alone.
+            .on_wheel(|s: &mut App, w: rune::WheelEvent, _: &mut Tx| {
+                if !(w.mods.ctrl || w.mods.cmd) {
+                    return false;
+                }
+                s.zoom_by(if w.precise { w.dy / 60.0 } else { w.dy.signum() });
+                true
+            })
+            .on_magnify(|s: &mut App, m: rune::MagnifyEvent, _: &mut Tx| {
+                s.zoom_by(m.delta / 0.25);
+                true
+            })
             .child(top)
             .child(zoomed)
             .child(wave),
     )
+}
+
+const VOLUME_W: f32 = 72.0;
+
+/// The volume: a speaker button that mutes, and a slider you can click or drag anywhere along.
+fn volume(s: &App, k: &Kit) -> El {
+    let c = &k.c;
+    let (v, muted) = (s.player.volume.0, s.player.muted);
+    let speaker = IconButton::new(if muted || v == 0.0 { &icons::SPEAKER_MUTED } else { &icons::SPEAKER })
+        .variant(IconButtonVariant::GhostMuted)
+        .label(if muted { "Unmute" } else { "Mute" })
+        .help(if muted { "Unmute" } else { "Mute" })
+        .on_press(|s: &mut App| s.player.toggle_mute())
+        .build(k)
+        .key("deck-mute");
+    // A thin track, filled up to the knob. Muted, it shows empty but keeps its place.
+    let x = if muted { 0.0 } else { v * VOLUME_W };
+    let percent = (v * 100.0).round();
+    let slider = el()
+        .key("deck-volume")
+        .size(VOLUME_W, 16.0)
+        .cursor(rune::Cursor::Pointer)
+        .role("slider")
+        .label(format!("Volume {percent}%"))
+        .help(format!("Volume {percent}%"))
+        .child(el().absolute(0.0, 7.0).size(VOLUME_W, 2.0).radius(1.0).fill(c.border_base).inert())
+        .child(el().absolute(0.0, 7.0).size(x, 2.0).radius(1.0).fill(c.text_muted).inert())
+        .child(el().absolute(x - 5.0, 3.0).size(10.0, 10.0).radius(5.0).fill(c.text_base).inert())
+        .on_drag(|s: &mut App, d: &mut Drag, _tx: &mut Tx| {
+            if d.w > 0.0 {
+                s.player.set_volume(d.x / d.w);
+            }
+        });
+    row().gap(2.0).center_y().child(speaker).child(slider)
 }
 
 fn pad(slot: usize, cue: Option<rbl_index::Cue>, total_ms: f64, k: &Kit) -> El {
@@ -235,10 +321,10 @@ fn pad(slot: usize, cue: Option<rbl_index::Cue>, total_ms: f64, k: &Kit) -> El {
     let _ = total_ms;
     k.interactive(pad)
         .on_press_tx(move |s: &mut App, tx| s.hot_cue(slot8, tx))
-        .on_secondary_press(move |s: &mut App, press, tx: &mut Tx| crate::ui::menus::cue_menu(s, slot8, press, tx))
+        .on_secondary_press(move |s: &mut App, press, _: &mut Tx| crate::ui::menus::cue_menu(s, slot8, press))
 }
 
-fn wave(s: &App, cues: &[Option<rbl_index::Cue>; 8], total_ms: f64, view_w: f32, k: &Kit) -> El {
+fn wave(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue], total_ms: f64, view_w: f32, k: &Kit) -> El {
     let Head { line: head, played } = head(s, "deck-wave", total_ms, view_w, WAVE_H, 2.0);
     let mut strip = el().key("deck-wave").instant_changes().w_full().h(WAVE_H).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
     if let Some(w) = &s.deck_wave {
@@ -268,6 +354,27 @@ fn wave(s: &App, cues: &[Option<rbl_index::Cue>; 8], total_ms: f64, view_w: f32,
                     .child(el().pin(None, Some(0.0), Some(-0.5), Some(0.0)).w(1.0).fill(ink.alpha(0.85)))
                     .child(el().pin(None, Some(3.0), Some(-6.0), None).child(flag)),
             );
+        }
+        // Memory cues: a red line and a triangle at the top. The triangle can be clicked to
+        // jump there, or right-clicked to delete it; the line lets clicks through to the waveform.
+        for (i, &cue) in memory.iter().enumerate() {
+            let x = (f64::from(cue.position_ms) / total_ms).clamp(0.0, 1.0) as f32 * view_w;
+            strip = strip
+                .child(el().key(format!("deck-mem-line-{i}")).absolute(x - 0.5, 0.0).size(1.0, WAVE_H).fill(memory_colour().alpha(0.7)).inert())
+                .child(
+                    el().key(format!("deck-mem-{i}"))
+                        .absolute(x - 5.0, 0.0)
+                        .child(memory_mark())
+                        .role("button")
+                        .label(format!("Memory cue at {}", library::duration(cue.position_ms / 1000)))
+                        .help(format!("Memory cue at {} · right-click to delete", library::duration(cue.position_ms / 1000)))
+                        .on_press(move |s: &mut App| s.jump_to(cue.position_ms))
+                        .on_secondary_press(move |s: &mut App, press, _: &mut Tx| {
+                            if let Some(row) = s.deck_row() {
+                                crate::ui::menus::memory_cue_menu(s, row, cue, press);
+                            }
+                        }),
+                );
         }
     }
     strip = strip.child(el().key("deck-head").absolute(0.0, 0.0).size(2.0, WAVE_H).fill(Color::WHITE).live_rect(&head).inert());
@@ -305,7 +412,7 @@ const ZOOM_H: f32 = 96.0;
 /// The zoomed waveform: a few seconds either side of the playhead, which stays in the middle
 /// while the track moves under it. Every beat has a line, every bar its number, so a cue can
 /// be put exactly on a beat. Dragging moves the track; with quantise on, it lands on a beat.
-fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], total_ms: f64, view_w: f32, k: &Kit) -> El {
+fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue], total_ms: f64, view_w: f32, k: &Kit) -> El {
     let c = &k.c;
     let mut strip = el().key("deck-zoom").instant_changes().w_full().h(ZOOM_H).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Grab);
     let pps = view_w / s.zoom_secs as f32;
@@ -371,6 +478,16 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], total_ms: f64, view_w: f3
         world = world
             .child(el().key(format!("deck-zoom-cue-{slot}")).absolute(x - 1.0, 0.0).w(2.0).h_full().fill(ink))
             .child(row().key(format!("deck-zoom-flag-{slot}")).absolute(x + 1.0, ZOOM_H - 18.0).size(14.0, 14.0).radius(3.0).fill(ink).center().child(text(letter).font(rune::TextStyle { size: 10.0, ..k.ty.small_medium }).color(oklch(0.2, 0.02, 0.0))));
+    }
+    // Memory cues: a red line and a triangle at the top, as in rekordbox.
+    for (i, cue) in memory.iter().enumerate() {
+        let x = x_of(cue.position_ms as f32 / 1000.0);
+        if !(-20.0..reach + 20.0).contains(&x) {
+            continue;
+        }
+        world = world
+            .child(el().key(format!("deck-zoom-mem-{i}")).absolute(x - 0.75, 0.0).w(1.5).h_full().fill(memory_colour().alpha(0.85)))
+            .child(memory_mark().key(format!("deck-zoom-mem-mark-{i}")).absolute(x - 5.0, 0.0));
     }
     strip = strip.child(world);
     // The playhead, fixed in the middle.
