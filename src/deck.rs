@@ -165,6 +165,21 @@ impl App {
         tx.wake_after(std::time::Duration::from_millis(33));
     }
 
+    /// Moving the cursor to a track, by click or arrow key, puts it on the deck paused, so the
+    /// deck always shows what you're looking at. Two cases leave the deck alone: a track
+    /// that's playing keeps playing while you browse, and a track that's only in iCloud waits
+    /// for play, so stepping through the list doesn't start downloads.
+    pub fn select_loads(&mut self, id: &str, tx: &mut Tx) {
+        if self.player.playing || self.fetch.is_some() {
+            return;
+        }
+        let Some(row) = self.loaded().and_then(|l| l.index.row_of(id)) else { return };
+        if self.evicted.contains(&row) {
+            return;
+        }
+        self.load_track(id, tx);
+    }
+
     /// Stops the download the deck was waiting on, if any.
     pub fn cancel_fetch(&mut self) {
         if let Some((job, _, _)) = self.fetch.take() {

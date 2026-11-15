@@ -245,6 +245,9 @@ impl Player {
             self.reanchor(self.pos, false);
             return;
         }
+        // The engine may still hold a track the deck was closed on. Playing it puts it back
+        // on the deck, or it would play with no deck on screen to stop it.
+        self.track = Some(id.to_owned());
         let Some(engine) = self.engine() else { return };
         let snap = engine.snapshot().a;
         if !snap.loaded {

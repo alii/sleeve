@@ -55,6 +55,7 @@ pub fn build(s: &App, width: f32, k: &Kit) -> El {
         .on_select(|s: &mut App, id, tx| {
             s.sync_artwork();
             s.track_clicked(id, tx);
+            s.select_loads(id, tx);
         })
         // A double click (or Return) puts the track on the deck, as in rekordbox. It's not a
         // click to edit, so a cell waiting to turn into a field stays as it is.
