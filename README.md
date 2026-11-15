@@ -4,12 +4,17 @@ A fast, good-looking app for your rekordbox library. Browse your tracks, analyse
 
 ![Sleeve](screenshot.png)
 
+<p align="center">
+  <a href="https://github.com/alii/sleeve/releases/latest/download/Sleeve.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" height="44"></a>
+  &nbsp;
+  <a href="https://github.com/alii/sleeve/releases/latest/download/Sleeve-windows.zip"><img src="https://img.shields.io/badge/Download_for_Windows-0078D4?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8+PC9zdmc+" alt="Download for Windows" height="44"></a>
+</p>
+
 ## Get it
 
-- **Mac:** download [Sleeve.dmg](https://github.com/alii/sleeve/releases/latest/download/Sleeve.dmg), open it and drag Sleeve into Applications.
-- **Windows:** download [Sleeve-windows.zip](https://github.com/alii/sleeve/releases/latest/download/Sleeve-windows.zip), unzip it and open Sleeve.exe. The first time, Windows may say it protected your PC: click **More info**, then **Run anyway**.
+On a Mac, open the download and drag Sleeve into Applications. On Windows, unzip it and open Sleeve.exe. If Windows says it protected your PC, click **More info**, then **Run anyway**.
 
-A new version comes out every time the code changes. See [all releases](https://github.com/alii/sleeve/releases).
+There's a new version every time the code changes. See [all releases](https://github.com/alii/sleeve/releases).
 
 ### Build it yourself
 
