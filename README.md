@@ -5,9 +5,9 @@ A fast, good-looking app for your rekordbox library. Browse your tracks, analyse
 ![Sleeve](screenshot.png)
 
 <p align="center">
-  <a href="https://github.com/alii/sleeve/releases/latest/download/Sleeve.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" height="72"></a>
-  <br><br>
-  <a href="https://github.com/alii/sleeve/releases/latest/download/Sleeve-windows.zip"><img src="https://img.shields.io/badge/Download_for_Windows-0078D4?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8+PC9zdmc+" alt="Download for Windows" height="72"></a>
+  <a href="https://github.com/alii/sleeve/releases/latest/download/Sleeve.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" width="343"></a>
+  &nbsp;
+  <a href="https://github.com/alii/sleeve/releases/latest/download/Sleeve-windows.zip"><img src="https://img.shields.io/badge/Download_for_Windows-0078D4?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yIDJoOS41djkuNUgyek0xMi41IDJIMjJ2OS41aC05LjV6TTIgMTIuNWg5LjVWMjJIMnpNMTIuNSAxMi41SDIyVjIyaC05LjV6Ii8+PC9zdmc+" alt="Download for Windows" width="420"></a>
 </p>
 
 ## Get it
