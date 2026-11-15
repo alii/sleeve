@@ -80,7 +80,8 @@ impl Store {
     }
 }
 
-/// Where Sleeve keeps its own files: Application Support on a Mac, `Documents\Sleeve` on Windows.
+/// Where Sleeve keeps its own files: Application Support on a Mac, `%LOCALAPPDATA%\Sleeve` on
+/// Windows, beside its log and cache. Not Documents, which OneDrive often syncs.
 #[cfg(not(windows))]
 fn app_dir() -> PathBuf {
     std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from).join("Library/Application Support/Sleeve")
@@ -88,5 +89,5 @@ fn app_dir() -> PathBuf {
 
 #[cfg(windows)]
 fn app_dir() -> PathBuf {
-    dirs::document_dir().unwrap_or_else(std::env::temp_dir).join("Sleeve")
+    dirs::data_local_dir().unwrap_or_else(std::env::temp_dir).join("Sleeve")
 }

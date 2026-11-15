@@ -10,21 +10,21 @@ repository = "https://github.com/alii/sleeve"
 rune = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69", features = ["native-file-dialog"] }
 rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
-rbl-core = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-db = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-index = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-anlz = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-audio = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-analysis = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-export = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-devices = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
-rbl-deck = { git = "https://github.com/chrisle/rbxport", rev = "d0ff75b378ec85be891d9f3067ada1e82bad4cae" }
+rbl-core = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-db = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-index = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-anlz = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-audio = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-analysis = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-export = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-devices = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-deck = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [target.'cfg(windows)'.dependencies]
-# Finds the Documents folder, including when OneDrive has moved it. Already built for rbl-core.
+# Finds the AppData folders. Already built for rbl-core.
 dirs = "5"
 
 [profile.dev.package."*"]
