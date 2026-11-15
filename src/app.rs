@@ -61,6 +61,10 @@ pub struct App {
     evicted_rx: Option<Receiver<(u64, HashSet<Row>)>>,
     /// Quantise: new hot cues and clicks on the deck waveform snap to the nearest beat.
     pub quantize: bool,
+    /// The deck track's beat grid being fixed by hand, while Grid is on.
+    pub(crate) grid_edit: Option<crate::grid_edit::GridEdit>,
+    /// The BPM box shown while editing the grid.
+    pub grid_bpm: TextEdit,
     /// Seconds of track the zoomed waveform shows across its width.
     pub zoom_secs: f64,
     /// A scroll or pinch on the deck that hasn't yet added up to a whole zoom step.
@@ -167,7 +171,9 @@ impl App {
             player: Default::default(),
             deck_wave: None,
             quantize: true,
-            zoom_secs: 4.0,
+            grid_edit: None,
+            grid_bpm: TextEdit::new(""),
+            zoom_secs: crate::deck::DEFAULT_ZOOM_SECS,
             zoom_gesture: 0.0,
             glides: std::cell::RefCell::new(None),
             deck_grid_rx: None,

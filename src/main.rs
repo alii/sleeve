@@ -7,6 +7,7 @@ mod icloud;
 mod import;
 mod export;
 mod filters;
+mod grid_edit;
 mod scenes;
 mod store;
 mod jobs;

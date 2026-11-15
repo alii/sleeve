@@ -12,6 +12,9 @@ use crate::ui::icons;
 const WAVE_H: f32 = 64.0;
 const PAD: (f32, f32) = (26.0, 22.0);
 
+/// The key held to stretch the grid instead of sliding it.
+const STRETCH_KEY: &str = if cfg!(target_os = "macos") { "⌥" } else { "Alt" };
+
 /// rekordbox's "colourful" hot cue defaults, near enough: A red, B sky, C green, D amber, E
 /// violet, F orange, G cyan, H pink.
 pub fn cue_colour(slot: usize) -> Color {
@@ -158,6 +161,28 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
         q.border(1.0, c.border_base).child(text("Q").font(k.ty.small_medium).color(c.text_faint))
     };
     let q = k.interactive(q).on_press(|s: &mut App| s.quantize ^= true);
+    let editing = s.grid_editing();
+    let g = row()
+        .key("deck-grid-edit")
+        .h(PAD.1)
+        .px(7.0)
+        .radius(5.0)
+        .center()
+        .role("switch")
+        .focusable(true)
+        .cursor(rune::Cursor::Pointer)
+        .label(if editing { "Save and exit beat grid edit mode" } else { "Enter beat grid edit mode" })
+        .help(match (editing, has_grid) {
+            (_, false) => "Editing the grid needs one. Analyse this track to get one.",
+            (false, true) => "Enter beat grid edit mode",
+            (true, true) => "Save and exit beat grid edit mode",
+        });
+    let g = if editing {
+        g.fill(c.icon_accent).child(text("SAVE").font(k.ty.small_medium).color(oklch(0.2, 0.02, 0.0)))
+    } else {
+        g.border(1.0, c.border_base).child(text("GRID").font(k.ty.small_medium).color(c.text_faint))
+    };
+    let g = k.interactive(g).on_press(|s: &mut App| s.toggle_grid_edit());
     let grid_at = crate::deck::grid_pos(s.deck_beats(), pos * total_ms);
     let counter = col()
         .key("deck-grid-pos")
@@ -178,7 +203,17 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
     let clock = if s.player.fetching {
         row().gap(6.0).center_y().child(rune_kit::Spinner::new().size(12.0).build(k)).child(text("Downloading from iCloud…").key("deck-fetching").font(k.ty.small).color(c.text_muted))
     } else if let Some(e) = &s.player.error {
-        text(e.clone()).key("deck-error").font(k.ty.small).color(c.danger.fg).truncate().max_w(260.0)
+        // Two lines, as the clock it stands in for: what happened, then the system's reason,
+        // which can be long. The whole message is in the tooltip.
+        let (what, why) = e.split_once(": ").unwrap_or((e.as_str(), ""));
+        col()
+            .key("deck-error")
+            .items_end()
+            .gap(1.0)
+            .max_w(260.0)
+            .help(e.clone())
+            .child(text(what.to_owned()).font(k.ty.small_medium).color(c.danger.fg).truncate())
+            .child(text(why.to_owned()).font(k.ty.small).color(c.text_faint).truncate())
     } else {
         clock
     };
@@ -219,7 +254,9 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
         .help("Save a memory cue at the playhead · C")
         .child(text("CUE").font(k.ty.small_medium).color(red));
     let mem = k.interactive(mem).on_press(|s: &mut App| s.memory_cue());
-    let controls = row().key("deck-controls").gap(12.0).center_y().child(mem).child(pads).child(q);
+    // Editing the grid, its tools take the place of the cue buttons.
+    let controls = row().key("deck-controls").gap(12.0).center_y();
+    let controls = if editing { controls.child(grid_tools(s, k)) } else { controls.child(mem).child(pads) }.child(q).child(g);
     let readouts = row().gap(12.0).center_y().child(counter).child(clock).child(volume(s, k)).child(play).child(row().gap(0.0).child(locate).child(close));
     let lead = row().gap(12.0).center_y().min_w(0.0).shrink().child(art.key("deck-art")).child(names);
     let top = if width >= ONE_ROW_W {
@@ -263,6 +300,51 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
             .child(zoomed)
             .child(wave),
     )
+}
+
+/// The buttons shown in place of the cue pads while editing the grid.
+fn grid_tools(s: &App, k: &Kit) -> El {
+    use crate::grid_edit::GridTool;
+    let c = &k.c;
+    let tool = |key: &'static str, label: &'static str, help: &'static str, t: GridTool| {
+        let b = row()
+            .key(key)
+            .h(PAD.1)
+            .px(7.0)
+            .radius(5.0)
+            .center()
+            .role("button")
+            .focusable(true)
+            .cursor(rune::Cursor::Pointer)
+            .border(1.0, c.border_base)
+            .label(help)
+            .help(help)
+            .child(text(label).font(k.ty.small_medium).color(c.text_base));
+        k.interactive(b).on_press(move |s: &mut App| s.grid_tool(t))
+    };
+    // The tempo, typed in: Return spaces the beats for it around the pinned beat.
+    let bpm = rune_kit::TextInput::new(&s.grid_bpm)
+        .label("Grid tempo in BPM")
+        .placeholder("BPM")
+        .text_style(k.ty.small_medium.features("'tnum' 1"))
+        .height(PAD.1)
+        // Snug around "128.00": the box keeps 8 points of padding each side.
+        .width(Some(54.0))
+        .on_edit(|s: &mut App| &mut s.grid_bpm)
+        .on_submit(|s: &mut App, _| s.set_grid_tempo())
+        .build(k)
+        .key("deck-grid-bpm")
+        .help("Type a tempo and press Return: the beats are spaced for it, holding the pinned beat still");
+    row()
+        .key("deck-grid-tools")
+        .gap(4.0)
+        .center_y()
+        .child(bpm)
+        .child(text("BPM").font(k.ty.small).color(c.text_faint))
+        .child(el().w(4.0))
+        .child(tool("deck-grid-snap", "SNAP", "Snap the nearest beat to the playhead, and pin it", GridTool::SnapToPlayhead))
+        .child(tool("deck-grid-halve", "÷2", "Halve the grid: half the beats, half the BPM", GridTool::Halve))
+        .child(tool("deck-grid-double", "×2", "Double the grid: twice the beats, twice the BPM", GridTool::Double))
 }
 
 const VOLUME_W: f32 = 72.0;
@@ -332,10 +414,12 @@ fn wave(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue], 
         strip = strip.child(el().w_full().h_full().pixels(&w.pixels));
     }
     if total_ms > 0.0 {
-        // Built once per track: the grid doesn't move.
+        // Built again only when the grid changes: a new track, or an edit, which always moves
+        // the first or last beat.
         let beats = s.deck_beats();
         let id = s.player.track.clone().unwrap_or_default();
-        strip = strip.child(rune::memo("deck-grid", (id, beats.len(), total_ms.to_bits()), || grid(beats, total_ms).w_full().h_full().absolute(0.0, 0.0).inert()));
+        let ends = (beats.first().map(|b| b.time_ms), beats.last().map(|b| b.time_ms));
+        strip = strip.child(rune::memo("deck-grid", (id, beats.len(), ends, total_ms.to_bits()), || grid(beats, total_ms).w_full().h_full().absolute(0.0, 0.0).inert()));
     }
     strip = strip.child(el().key("deck-played").absolute(0.0, 0.0).h_full().w(0.0).fill(screen().alpha(0.55)).live_rect(&played).inert());
     // Hot cue markers: a hairline and a lettered flag in the cue's colour.
@@ -490,11 +574,50 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .child(el().key(format!("deck-zoom-mem-{i}")).absolute(x - 0.75, 0.0).w(1.5).h_full().fill(memory_colour().alpha(0.85)))
             .child(memory_mark().key(format!("deck-zoom-mem-mark-{i}")).absolute(x - 5.0, 0.0));
     }
+    // The pinned beat, which stretching holds still: a dot at the foot of its line.
+    let edit = s.grid_edit.as_ref().filter(|_| s.grid_editing());
+    if let Some(pin) = edit.and_then(|g| g.pivot_ms) {
+        let x = x_of(pin as f32 / 1000.0);
+        world = world.child(el().key("deck-zoom-pin").absolute(x - 4.0, ZOOM_H - 10.0).size(8.0, 8.0).radius(4.0).fill(c.icon_accent));
+    }
     strip = strip.child(world);
+    if let Some(g) = edit {
+        let mut bar = row()
+            .key("deck-zoom-grid-bar")
+            .absolute(4.0, ZOOM_H - 26.0)
+            // A fixed height, so the text doesn't move when Revert appears beside it.
+            .h(22.0)
+            .gap(6.0)
+            .px(6.0)
+            .py(2.0)
+            .radius(6.0)
+            .center_y()
+            .fill(screen())
+            .child(text(format!("Drag to slide · {STRETCH_KEY}-drag to stretch")).font(k.ty.small).color(Color::WHITE.alpha(0.7)));
+        if g.changed() {
+            bar = bar.child(
+                row()
+                    .key("deck-zoom-revert")
+                    .h(18.0)
+                    .px(6.0)
+                    .radius(4.0)
+                    .center()
+                    .fill(Color::WHITE.alpha(0.08))
+                    .hover(Color::WHITE.alpha(0.16))
+                    .cursor(rune::Cursor::Pointer)
+                    .role("button")
+                    .label("Revert to the saved grid")
+                    .help("Revert to the saved grid")
+                    .child(text("Revert").font(k.ty.small_medium).color(Color::WHITE.alpha(0.85)))
+                    .on_press(|s: &mut App| s.revert_grid()),
+            );
+        }
+        strip = strip.child(bar);
+    }
     // The playhead, fixed in the middle.
     strip = strip
         .child(el().key("deck-zoom-head").absolute(centre - 1.0, 0.0).w(2.0).h_full().fill(c.danger.icon).inert())
-        .child(el().absolute(centre - 5.0, 0.0).size(10.0, 4.0).radius(1.0).fill(c.danger.icon).inert());
+        .child(el().key("deck-zoom-head-cap").absolute(centre - 5.0, 0.0).size(10.0, 4.0).radius(1.0).fill(c.danger.icon).inert());
     // Zoom buttons, top right.
     let zoom_btn = |label: &'static str, step: i32, key: &'static str, help: &'static str| {
         row()
@@ -513,6 +636,7 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
     };
     strip = strip.child(
         row()
+            .key("deck-zoom-buttons")
             .absolute(view_w - 60.0, 2.0)
             .gap(4.0)
             .px(2.0)
@@ -520,12 +644,19 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .radius(6.0)
             // Solid, so bar numbers scrolling past don't show through.
             .fill(screen())
-            .child(zoom_btn("−", 1, "deck-zoom-out", "Zoom out · -"))
-            .child(zoom_btn("+", -1, "deck-zoom-in", "Zoom in · =")),
+            .child(zoom_btn("−", 1, "deck-zoom-out", "Zoom out · - (Shift = resets)"))
+            .child(zoom_btn("+", -1, "deck-zoom-in", "Zoom in · = (Shift = resets)")),
     );
-    strip.on_drag(move |s: &mut App, d: &mut Drag, _tx: &mut Tx| {
+    strip.on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
         let Some(total) = s.deck_duration_ms().filter(|t| *t > 0.0) else { return };
         let pps = d.w / s.zoom_secs as f32;
+        // With Grid on, the drag moves the grid, not the track. The time under the pointer is
+        // worked out afresh each step, so it holds while the track plays.
+        if s.grid_editing() {
+            let at_ms = s.player.now() * total + f64::from((d.x - d.w / 2.0) / pps.max(1.0)) * 1000.0;
+            s.grid_drag(d.phase, at_ms, tx.mods().alt, d.cancelled());
+            return;
+        }
         match d.phase {
             Phase::Down => d.data = (s.player.now() * total / 1000.0) as f32,
             _ => {

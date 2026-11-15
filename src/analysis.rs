@@ -177,7 +177,7 @@ fn one(store: &Store, t: &Track, cancel: &CancelToken, log: Option<&Logger>) -> 
     );
     match save(store, t, &analysis, &waves, secs) {
         Ok(()) => TrackResult::Saved(format!("{found}, saved.")),
-        Err(SaveError::Write(WriteError::Refused(why))) => TrackResult::Refused(why),
+        Err(SaveError::Write(WriteError::Refused(why)) | SaveError::Refused(why)) => TrackResult::Refused(why),
         Err(SaveError::Write(WriteError::Failed(e))) => TrackResult::Failed("the library wouldn't take its results".into(), format!("database write failed: {e}")),
         Err(SaveError::Files(e)) => TrackResult::Failed("couldn't write its analysis files".into(), format!("ANLZ write failed: {e} ({:?})", e.kind())),
     }
@@ -254,9 +254,11 @@ fn decode_and_analyse(path: &Path, cancel: &CancelToken) -> Result<(rbl_analysis
 /// Writes the three analysis files and then the library row. If the row can't be written, the
 /// files are put back as they were, so the two never disagree.
 #[derive(Debug)]
-enum SaveError {
+pub(crate) enum SaveError {
     Write(WriteError),
     Files(std::io::Error),
+    /// Nothing was written: the track has nothing to save to, in words for a person.
+    Refused(String),
 }
 
 impl std::fmt::Display for SaveError {
@@ -264,6 +266,7 @@ impl std::fmt::Display for SaveError {
         match self {
             SaveError::Write(e) => write!(f, "{e}"),
             SaveError::Files(e) => write!(f, "couldn't write its analysis files ({e})"),
+            SaveError::Refused(why) => write!(f, "{why}"),
         }
     }
 }
@@ -315,13 +318,56 @@ fn save(store: &Store, t: &Track, analysis: &rbl_analysis::Analysis, waves: &rbl
     }
 }
 
+/// Saves an edited beat grid for a track that's been analysed, the way rekordbox saves its own
+/// grid edits. The `.DAT` gets the new grid with every other section left as it was. The
+/// `.EXT`'s extended grid (`PQT2`, which newer players read) can't be worked out again, so it
+/// keeps its data only if the beats' times and tempos didn't change, and is emptied otherwise.
+/// Then the library row gets the new BPM and a new analysis revision, which tells rekordbox to
+/// read the analysis again. If the row can't be written the old files are put back.
+///
+/// The grid's offset (a correction rekordbox can keep beside the beats) goes back to zero.
+/// Sleeve draws the beats without it, so zero keeps the saved grid where it was edited.
+pub(crate) fn save_grid(store: &Store, track_id: &str, analysis_path: &str, beats: &[rbl_anlz::Beat]) -> Result<(), SaveError> {
+    let refused = |why: &str| SaveError::Refused(why.to_owned());
+    let bpm_x100 = u32::from(rbl_anlz::grid::tempo_x100(beats));
+    if bpm_x100 == 0 {
+        return Err(refused("the grid has no beats"));
+    }
+    if analysis_path.is_empty() {
+        return Err(refused("it hasn't been analysed, so there's no grid to save"));
+    }
+    let dat_path = rbl_anlz::resolve(&store.location.share_root, analysis_path);
+    let dat = rbl_anlz::Anlz::read(&dat_path).map_err(|e| SaveError::Refused(format!("couldn't read its analysis ({e})")))?;
+    let old = dat.beat_grid().unwrap_or_default();
+    let mut paths = vec![dat_path.clone()];
+    let mut bytes = vec![dat.with_beat_grid(beats)];
+    // No `.EXT`, or one with no extended grid to bring in line, is left alone.
+    let ext_path = rbl_anlz::sibling(&dat_path, "EXT");
+    if let Some(ext) = rbl_anlz::Anlz::read(&ext_path).ok().and_then(|ext| ext.with_extended_grid_edit(&old, beats, 0)) {
+        paths.push(ext_path);
+        bytes.push(ext);
+    }
+
+    let swap = FileSwap::write(&paths, bytes).map_err(SaveError::Files)?;
+    match store.write(|w| w.save_grid_revision(track_id, bpm_x100)) {
+        Ok(()) => {
+            swap.commit();
+            Ok(())
+        }
+        Err(e) => {
+            swap.undo();
+            Err(e.into())
+        }
+    }
+}
+
 /// New files moved into place with the old ones kept aside until the library row is written.
 struct FileSwap {
     moved: Vec<(std::path::PathBuf, Option<std::path::PathBuf>)>,
 }
 
 impl FileSwap {
-    fn write(paths: &[std::path::PathBuf; 3], bytes: [Vec<u8>; 3]) -> std::io::Result<FileSwap> {
+    fn write(paths: &[std::path::PathBuf], bytes: impl IntoIterator<Item = Vec<u8>>) -> std::io::Result<FileSwap> {
         let mut swap = FileSwap { moved: Vec::new() };
         for (path, data) in paths.iter().zip(bytes) {
             let step = || -> std::io::Result<Option<std::path::PathBuf>> {
@@ -471,6 +517,53 @@ pub(crate) mod tests {
         // No temporary files left behind.
         let leftovers = std::fs::read_dir(dat.parent().unwrap()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("sleeve-")).count();
         assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn an_edited_grid_is_saved_to_the_files_and_the_row() {
+        let (_dir, store) = setup("grid", 1);
+        let before = index(&store);
+        let row = before.row_of(&rbl_db::fixture::track_id(0)).unwrap();
+        let track = tracks(&before, &[row]);
+        let mut jobs = Jobs::default();
+        let s = store.clone();
+        let id = jobs.spawn(JobKind::Analysis, "a", move |rep| run(&s, track, rep));
+        wait(&mut jobs, id);
+
+        let analysed = index(&store);
+        let r = row as usize;
+        let rel = analysed.analysis_path.get(r).to_owned();
+        let dat = rbl_anlz::resolve(&store.location.share_root, &rel);
+        let read = |p: &Path| rbl_anlz::Anlz::read(p).unwrap();
+        let (old_dat, old_2ex) = (read(&dat), std::fs::read(rbl_anlz::sibling(&dat, "2EX")).unwrap());
+        let old = old_dat.beat_grid().unwrap();
+
+        // 50 ms later and a touch faster, as if two anchors had been dragged.
+        let gap = 60_000.0 / 121.0;
+        let edited = crate::deck::fit_grid(&old, (0, f64::from(old[0].time_ms) + 50.0), Some((8, f64::from(old[0].time_ms) + 50.0 + 8.0 * gap)), 30_000.0).unwrap();
+        save_grid(&store, &rbl_db::fixture::track_id(0).to_string(), &rel, &edited).unwrap();
+
+        let saved = read(&dat);
+        assert_eq!(saved.beat_grid().unwrap(), edited);
+        assert_eq!(saved.grid_offset(), Some(0));
+        // Everything but the grid is as it was.
+        assert_eq!(saved.waveform(b"PWAV"), old_dat.waveform(b"PWAV"));
+        assert_eq!(std::fs::read(rbl_anlz::sibling(&dat, "2EX")).unwrap(), old_2ex);
+        let after = index(&store);
+        assert_eq!(after.bpm_x100[r], 12100);
+        assert_eq!(after.analysis_path.get(r), rel, "the grid is saved where it was");
+        let leftovers = std::fs::read_dir(dat.parent().unwrap()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("sleeve-")).count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn a_grid_with_nowhere_to_go_is_refused() {
+        let (_dir, store) = setup("grid-refused", 1);
+        let id = rbl_db::fixture::track_id(0).to_string();
+        let beat = rbl_anlz::Beat { beat_number: 1, tempo_x100: 12000, time_ms: 0 };
+        assert!(matches!(save_grid(&store, &id, "", &[beat]), Err(SaveError::Refused(_))));
+        assert!(matches!(save_grid(&store, &id, "/PIONEER/nope/ANLZ0000.DAT", &[]), Err(SaveError::Refused(_))));
+        assert!(matches!(save_grid(&store, &id, "/PIONEER/nope/ANLZ0000.DAT", &[beat]), Err(SaveError::Refused(_))));
     }
 
     #[test]

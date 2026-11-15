@@ -54,11 +54,18 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .placeholder("Search")
         .leading_icon(&icons::SEARCH)
         .width(Some(if panel_w < 760.0 { 160.0 } else { 240.0 }))
-        .clear_button()
         .on_edit(|s: &mut App| &mut s.search)
-        .on_change(|s: &mut App, _| s.refresh_rows())
-        .build(k)
-        .key("search");
+        .on_change(|s: &mut App, _| s.refresh_rows());
+    // The clear button shows only with something to clear. Rune draws it; what it does is ours.
+    let search = if s.search.text.is_empty() {
+        search
+    } else {
+        search.clear_button().on_action(|s: &mut App, _| {
+            s.search = rune::TextEdit::new("");
+            s.refresh_rows();
+        })
+    };
+    let search = search.build(k).key("search");
     let inspector_toggle = IconButton::new(&shell::INSPECTOR)
         .variant(IconButtonVariant::GhostMuted)
         .expanded(s.inspector.is_open())
@@ -256,10 +263,38 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return true;
     }
-    // On the deck: ← and → step a beat, with ⇧ a bar; - and = zoom the waveform.
+    // While fixing the grid, undo takes back the last drag.
+    if s.grid_editing() && ev.is_command('z') && !ev.mods.shift && s.undo_grid() {
+        return true;
+    }
+    // Ctrl (⌘ on a Mac) with = and - zooms the waveform too, as it zooms most apps and as Ctrl
+    // and the scroll wheel already do here; with 0 it resets.
+    if s.player.track.is_some()
+        && (ev.mods.cmd || ev.mods.ctrl)
+        && !ev.mods.alt
+        && let rune::Key::Text(t) = &ev.key
+    {
+        match t.as_str() {
+            "=" | "+" => s.zoom(-1),
+            "-" => s.zoom(1),
+            "0" => s.reset_zoom(),
+            _ => {}
+        }
+        if matches!(t.as_str(), "=" | "+" | "-" | "0") {
+            return true;
+        }
+    }
+    // On the deck: ← and → step a beat, with ⇧ a bar; - and = zoom the waveform, as in
+    // rekordbox, and ⇧= resets it.
     if s.player.track.is_some() && !ev.mods.cmd && !ev.mods.alt && !ev.mods.ctrl {
         let bar = if ev.mods.shift { 4 } else { 1 };
         match &ev.key {
+            // On a US keyboard ⇧= types "+", so a shifted "+" is the reset too. A "+" key of its
+            // own (a keypad's, or another layout's) zooms in.
+            rune::Key::Text(t) if ev.mods.shift && (t == "=" || t == "+") => {
+                s.reset_zoom();
+                return true;
+            }
             rune::Key::Left => {
                 s.nudge_beats(-bar);
                 return true;
