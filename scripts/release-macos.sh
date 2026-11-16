@@ -117,7 +117,10 @@ STAGE="$OUT/dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+# hdiutil sometimes sizes the image too small and fails with "No space left on device", so
+# it's given a size: the app's, plus room for the file system.
+mb=$(( $(du -sm "$STAGE" | cut -f1) + 64 ))
+hdiutil create -volname "$NAME" -srcfolder "$STAGE" -size "${mb}m" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
 if [ $can_notarize = 1 ]; then
