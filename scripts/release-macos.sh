@@ -52,6 +52,9 @@ xcrun actool assets/AppIcon.icon --compile "$APP/Contents/Resources" \
     --platform macosx --minimum-deployment-target 13.0 --app-icon AppIcon \
     --output-partial-info-plist "$OUT/icon.plist" >/dev/null
 
+# The extra lines in the About box.
+cp assets/Credits.rtf "$APP/Contents/Resources/"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -69,7 +72,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>GPL-2.0-or-later</string>
+    <key>NSHumanReadableCopyright</key><string>© $(date +%Y) Alistair Smith. Free software under the GPL-2.0-or-later.</string>
 </dict>
 </plist>
 PLIST
