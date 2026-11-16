@@ -58,7 +58,13 @@ pub fn build(s: &App, wave_size: Option<[f32; 2]>, k: &Kit) -> El {
     let mut stats = row().gap(8.0).w_full();
     stats = stats.child(stat("BPM", library::bpm(f.bpm_x100), k));
     stats = stats.child(match tracks::camelot(f.key, k.dark) {
-        Some((label, ink)) => stat_ink("Key", label, ink, k),
+        Some((label, ink)) => {
+            let shown = match tracks::note_name(&label) {
+                Some(name) => format!("{label} · {name}"),
+                None => label,
+            };
+            stat_ink("Key", shown, ink, k)
+        }
         None => stat("Key", f.key.to_owned(), k),
     });
     stats = stats.child(stat("Time", library::duration(f.length_sec), k));
