@@ -7,6 +7,7 @@ pub mod inspector;
 pub mod menus;
 pub mod sidebar;
 pub mod statusbar;
+pub mod titlebar;
 pub mod tracks;
 pub mod update;
 
@@ -88,6 +89,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // Overlays (the Filter menu, the filter popover, the confirm dialog) go on one layer above
     // everything. Made here, as the toolbar's Filter button puts its menu on it.
     let mut layer = Vec::new();
+    let bar = titlebar::build(s, cx, k, &mut layer);
     let filter = filters::button(s, k, &mut layer);
     let heading = text(title(s)).key("toolbar-title").font(k.ty.body_medium).color(c.text_base).truncate().shrink();
     let toolbar = Toolbar::new()
@@ -98,7 +100,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar::build(s, k))
         .inspector(&s.inspector, |s: &mut App| &mut s.inspector, inspector::build(s, cx.layout_size("insp-wave-strip"), k))
         .toolbar(toolbar)
-        .titlebar_inset(cx.titlebar_inset())
+        // No traffic lights on Windows, so nothing to clear. The Windows snapshot scenes drop them too.
+        .titlebar_inset(if s.preview_titlebar { 0.0 } else { cx.titlebar_inset() })
         .frame_inset(8.0)
         .toolbar_in_panel()
         .sidebar_padding(8.0, 8.0)
@@ -107,7 +110,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
 
-    let mut root = col().w_full().h_full().fill(c.page).child(split);
+    // On Windows, Sleeve's own title bar goes above everything.
+    let split = match bar {
+        Some(_) => col().key("below-titlebar").w_full().grow(1.0).min_h(0.0).child(split),
+        None => split,
+    };
+    let mut root = col().w_full().h_full().fill(c.page).children(bar).child(split);
     if s.drop_over == Some(DropTarget::Library) {
         root = root.child(drop_veil(s, k));
     }
