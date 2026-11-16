@@ -76,14 +76,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .key("inspector-toggle");
     let n = s.analyse_rows().len();
     let fresh = s.selected_rows().is_empty();
-    let analyse = Button::new(match (n, fresh) {
-        (0, true) => "All analysed".to_owned(),
-        (0, false) => "Analyse".to_owned(),
-        (1, true) => "Analyse 1 new".to_owned(),
-        (n, true) => format!("Analyse {n} new"),
-        (1, false) => "Analyse 1 track".to_owned(),
-        (n, false) => format!("Analyse {n} tracks"),
-    })
+    let analyse = Button::new(s.analyse_label())
     .icon(&icons::WAVE)
     .variant(ButtonVariant::Ghost)
     .rolling("analyse-label")

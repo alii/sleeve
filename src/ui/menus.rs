@@ -146,7 +146,7 @@ fn tracks(s: &App, ids: &[String], sub: bool, menu: Menu) -> Menu {
         }
     });
     let mut menu = menu
-        .item(act(if analyse == 1 { "Analyse 1 track".to_owned() } else { format!("Analyse {analyse} tracks") }, |s, _| s.analyse()).disabled(analyse == 0))
+        .item(act(s.analyse_label(), |s, _| s.analyse()).disabled(analyse == 0))
         .item(act(reveal, |s, _| s.show_in_finder()).disabled(n == 0))
         .separator()
         .item(add_to);

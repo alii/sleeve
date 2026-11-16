@@ -598,6 +598,21 @@ impl App {
         self.rows.iter().copied().filter(|&r| l.index.analysis_path.get(r as usize).is_empty()).collect()
     }
 
+    /// What the Analyse button and menu item say for `analyse_rows`. Tracks that are all
+    /// analysed already get "Reanalyse", as pressing it replaces their grids.
+    pub fn analyse_label(&self) -> String {
+        let rows = self.analyse_rows();
+        let done = self.loaded().is_some_and(|l| !rows.is_empty() && rows.iter().all(|&r| !l.index.analysis_path.get(r as usize).is_empty()));
+        let verb = if done { "Reanalyse" } else { "Analyse" };
+        match (rows.len(), self.selected_rows().is_empty()) {
+            (0, true) => "All analysed".to_owned(),
+            (0, false) => "Analyse".to_owned(),
+            (n, true) => format!("Analyse {n} new"),
+            (1, false) => format!("{verb} 1 track"),
+            (n, false) => format!("{verb} {n} tracks"),
+        }
+    }
+
     /// Starts a job that analyses `analyse_rows`. Each press makes its own job with its own stop
     /// button.
     /// Clicking a job's chip: opens the Activity panel, with the log showing if the job failed
