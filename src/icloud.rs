@@ -74,7 +74,7 @@ impl std::fmt::Display for DownloadError {
         match self {
             DownloadError::Io(e) if e.raw_os_error() == Some(11) => write!(f, "macOS wouldn't let Sleeve download it from iCloud"),
             DownloadError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => write!(f, "its file has gone from iCloud Drive"),
-            DownloadError::Io(_) => write!(f, "couldn't download it from iCloud"),
+            DownloadError::Io(_) => write!(f, "couldn't download it from iCloud. Check you're online and try again."),
             DownloadError::StillInCloud => write!(f, "iCloud didn't finish downloading it. Check you're online and try again."),
             DownloadError::Stopped => write!(f, "the download was stopped"),
         }
@@ -83,10 +83,66 @@ impl std::fmt::Display for DownloadError {
 
 impl std::error::Error for DownloadError {}
 
+/// How many times a download is tried before giving up, when it fails in a way that might
+/// work a moment later.
+const TRIES: u32 = 5;
+
+/// Whether trying again might work. iCloud often times out or drops the connection when the
+/// network is slow or flaky, or when it's busy with other files, and a second go usually
+/// works. A file that's gone, or a Mac that won't allow downloads, won't fix itself.
+fn worth_retrying(e: &DownloadError) -> bool {
+    match e {
+        DownloadError::StillInCloud => true,
+        DownloadError::Stopped => false,
+        DownloadError::Io(e) => matches!(
+            e.raw_os_error(),
+            // EINTR, EIO, EAGAIN, ENETDOWN, ENETUNREACH, ENETRESET, ECONNABORTED, ECONNRESET,
+            // ENOTCONN, ETIMEDOUT, EHOSTDOWN, EHOSTUNREACH
+            Some(4 | 5 | 35 | 50 | 51 | 52 | 53 | 54 | 57 | 60 | 64 | 65)
+        ) || matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted),
+    }
+}
+
 /// Brings the file down from iCloud, calling `progress` with bytes on disk and the file's size
 /// as it goes. Returns early with `Stopped` once `stop()` says so: the read itself can't be
 /// interrupted, so it carries on in the background and the file just ends up downloaded.
-pub fn download(path: &Path, stop: impl Fn() -> bool, mut progress: impl FnMut(u64, u64)) -> Result<(), DownloadError> {
+///
+/// A failure that might be brief, like a timeout, is tried again a few times, waiting a bit
+/// longer each time. `retrying` hears about each one: the try that failed, why, and the wait.
+pub fn download(
+    path: &Path,
+    stop: impl Fn() -> bool,
+    mut progress: impl FnMut(u64, u64),
+    mut retrying: impl FnMut(u32, &DownloadError, std::time::Duration),
+) -> Result<(), DownloadError> {
+    let mut attempt = 1;
+    loop {
+        match download_once(path, &stop, &mut progress) {
+            Err(e) if attempt < TRIES && worth_retrying(&e) => {
+                let wait = std::time::Duration::from_secs(2u64 << (attempt - 1)).min(std::time::Duration::from_secs(20));
+                retrying(attempt, &e, wait);
+                let until = std::time::Instant::now() + wait;
+                while std::time::Instant::now() < until {
+                    if stop() {
+                        return Err(DownloadError::Stopped);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                // It may have finished in the background while we waited.
+                if let Ok(m) = std::fs::metadata(path)
+                    && !is_evicted(path)
+                {
+                    progress(m.len(), m.len());
+                    return Ok(());
+                }
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+fn download_once(path: &Path, stop: &impl Fn() -> bool, progress: &mut impl FnMut(u64, u64)) -> Result<(), DownloadError> {
     use std::io::Read;
     let _ = allow_downloads();
     let size = std::fs::metadata(path).map_err(DownloadError::Io)?.len();
@@ -156,7 +212,13 @@ pub fn run(path: &Path, title: &str, rep: &mut crate::jobs::Reporter) -> crate::
         rep.warn(format!("Couldn't turn on iCloud downloads for this process: {e}. Trying anyway."));
     }
     let token = rep.token();
-    let result = download(path, || token.is_cancelled(), |done, total| rep.progress(done, Some(total.max(1)), format!("{} of {}", self::size(done), self::size(total))));
+    let log = rep.log().clone();
+    let result = download(
+        path,
+        || token.is_cancelled(),
+        |done, total| rep.progress(done, Some(total.max(1)), format!("{} of {}", self::size(done), self::size(total))),
+        |n, e, wait| log.warn(format!("Try {n} of {TRIES} failed: {}. Trying again in {}s.", e.detail(), wait.as_secs())),
+    );
     match result {
         Ok(()) => {
             let secs = started.elapsed().as_secs_f64();
@@ -194,7 +256,13 @@ pub fn fetch_all(paths: &[std::path::PathBuf], rep: &mut crate::jobs::Reporter) 
     for p in cloud {
         let name = p.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         let this = std::fs::metadata(p).map_or(0, |m| m.len());
-        let result = download(p, || token.is_cancelled(), |done, _| rep.progress(before + done, Some(total.max(1)), format!("{name} · {} of {}", size(before + done), size(total))));
+        let log = rep.log().clone();
+        let result = download(
+            p,
+            || token.is_cancelled(),
+            |done, _| rep.progress(before + done, Some(total.max(1)), format!("{name} · {} of {}", size(before + done), size(total))),
+            |n, e, wait| log.warn(format!("\"{name}\": try {n} of {TRIES} failed: {}. Trying again in {}s.", e.detail(), wait.as_secs())),
+        );
         match result {
             Ok(()) => rep.info(format!("Downloaded \"{name}\" ({}).", size(this))),
             Err(DownloadError::Stopped) => return Err(Stopped),

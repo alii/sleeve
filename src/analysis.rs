@@ -147,7 +147,12 @@ fn one(store: &Store, t: &Track, cancel: &CancelToken, log: Option<&Logger>) -> 
         if let Some(l) = log {
             l.info(format!("\"{}\": only in iCloud ({}). Downloading it first.", t.title, crate::icloud::size(size)));
         }
-        match crate::icloud::download(path, || cancel.is_cancelled(), |_, _| {}) {
+        let retrying = |n, e: &crate::icloud::DownloadError, wait: std::time::Duration| {
+            if let Some(l) = log {
+                l.warn(format!("\"{}\": iCloud download try {n} failed: {}. Trying again in {}s.", t.title, e.detail(), wait.as_secs()));
+            }
+        };
+        match crate::icloud::download(path, || cancel.is_cancelled(), |_, _| {}, retrying) {
             Ok(()) => {
                 if let Some(l) = log {
                     l.info(format!("\"{}\": downloaded in {:.1}s.", t.title, started.elapsed().as_secs_f64()));

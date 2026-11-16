@@ -206,14 +206,25 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
         // Two lines, as the clock it stands in for: what happened, then the system's reason,
         // which can be long. The whole message is in the tooltip.
         let (what, why) = e.split_once(": ").unwrap_or((e.as_str(), ""));
-        col()
-            .key("deck-error")
+        let why = why.split(". ").next().unwrap_or(why);
+        let message = col()
             .items_end()
             .gap(1.0)
             .max_w(260.0)
             .help(e.clone())
             .child(text(what.to_owned()).font(k.ty.small_medium).color(c.danger.fg).truncate())
-            .child(text(why.to_owned()).font(k.ty.small).color(c.text_faint).truncate())
+            .child(text(why.to_owned()).font(k.ty.small).color(c.text_faint).truncate());
+        // Most failures, like a dropped iCloud download, work on a second go.
+        let retry = rune_kit::Button::new("Try again")
+            .variant(rune_kit::ButtonVariant::Neutral)
+            .control_size(rune_kit::ControlSize::Small)
+            .on_press_tx(|s: &mut App, tx| s.toggle_deck(tx))
+            .build(k)
+            .key("deck-retry");
+        // Narrow, the title and readouts share one row with no room for the message, so only
+        // the button shows, with the message in its tooltip. The status bar has it too.
+        let retry = retry.help(e.clone());
+        if width >= ONE_ROW_W { row().key("deck-error").gap(8.0).center_y().child(message).child(retry) } else { row().key("deck-error").child(retry) }
     } else {
         clock
     };
@@ -257,7 +268,9 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
     // Editing the grid, its tools take the place of the cue buttons.
     let controls = row().key("deck-controls").gap(12.0).center_y();
     let controls = if editing { controls.child(grid_tools(s, k)) } else { controls.child(mem).child(pads) }.child(q).child(g);
-    let readouts = row().gap(12.0).center_y().child(counter).child(clock).child(volume(s, k)).child(play).child(row().gap(0.0).child(locate).child(close));
+    // Narrow, an error's Try again button takes the grid counter's place.
+    let counter = (width >= ONE_ROW_W || s.player.error.is_none() || s.player.fetching).then_some(counter);
+    let readouts = row().gap(12.0).center_y().children(counter).child(clock).child(volume(s, k)).child(play).child(row().gap(0.0).child(locate).child(close));
     let lead = row().gap(12.0).center_y().min_w(0.0).shrink().child(art.key("deck-art")).child(names);
     let top = if width >= ONE_ROW_W {
         col().w_full().child(

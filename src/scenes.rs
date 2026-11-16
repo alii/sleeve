@@ -27,6 +27,17 @@ pub fn playing(s: &mut App) {
     }
 }
 
+/// A track on the deck whose iCloud download failed, with its Try again button.
+pub fn failed(s: &mut App) {
+    selected(s);
+    if let Some(id) = s.table.cursor().map(str::to_owned) {
+        s.player.stage(&id, 0.0);
+        s.player.playing = false;
+        s.player.error = Some("Couldn't play Audio, Video, Disco: couldn't download it from iCloud. Check you're online and try again.".into());
+        s.sync_deck_wave();
+    }
+}
+
 /// The demo's one title from the far corners of Unicode, alone in the list, to check fallback.
 pub fn glyphs(s: &mut App) {
     s.search = rune::TextEdit::new("✧");

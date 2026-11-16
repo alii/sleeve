@@ -33,6 +33,8 @@ SHOTS = [
     ("activity", "activity", "dark", "1280x800", None),
     ("playing", "playing", "dark", "1280x800", None),
     ("playing-narrow", "playing", "light", "900x600", None),
+    ("failed", "failed", "dark", "1280x800", None),
+    ("failed-narrow", "failed", "light", "900x600", None),
     ("narrow", "selected", "dark", "900x600", None),
     ("glyphs", "glyphs", "dark", "1280x800", None),
     ("collapsed", "collapsed", "dark", "1280x800", None),
