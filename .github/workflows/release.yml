@@ -37,6 +37,13 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     steps:
+      # The runner's disk is nearly full out of the box, and two Rust targets plus the DMG
+      # don't fit. Android and .NET aren't needed here, and are the biggest things on it.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf "$HOME/Library/Android" /usr/local/share/dotnet "$HOME/.dotnet" /usr/local/lib/android || true
+          df -h /
       - uses: actions/checkout@v4
       - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
