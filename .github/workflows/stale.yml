@@ -1,0 +1,33 @@
+# Closes issues and PRs that have had no activity for two weeks. Add the "keep" label to
+# one to stop it being closed.
+
+name: Close stale
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 14
+          days-before-close: 0
+          stale-issue-label: stale
+          stale-pr-label: stale
+          exempt-issue-labels: keep
+          exempt-pr-labels: keep
+          operations-per-run: 200
+          close-issue-message: >
+            Closing this because nothing has happened on it for two weeks. If it still
+            matters, comment and a maintainer can reopen it.
+          close-pr-message: >
+            Closing this because nothing has happened on it for two weeks. If you're still
+            working on it, comment and a maintainer can reopen it.
