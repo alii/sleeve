@@ -1,5 +1,9 @@
-# Every push to main builds Sleeve for Mac and Windows and publishes it as the latest
-# GitHub release. The Mac app is signed with the Developer ID and notarized by Apple. The
+# Builds Sleeve for Mac and Windows from main and publishes it as the latest GitHub
+# release. It only runs when started by hand, so several PRs can go in first:
+#
+#   gh workflow run release.yml
+#
+# or Actions > Release > Run workflow on GitHub. The Mac app is signed with the Developer ID and notarized by Apple. The
 # Windows exe isn't signed, so SmartScreen warns the first time it's opened.
 #
 # Secrets it needs:
@@ -12,11 +16,9 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
-# One release at a time, in push order.
+# One release at a time, in the order they were started.
 concurrency:
   group: release
   cancel-in-progress: false
