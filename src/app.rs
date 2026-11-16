@@ -694,6 +694,26 @@ impl App {
         self.wave = Some((row, generation, pixels));
     }
 
+    /// Draws the waveforms on screen again in the theme's colours, after it changes. The pixels
+    /// stay the same objects, so nothing blanks while they're drawn.
+    pub fn redraw_waves(&self) {
+        let Some(l) = self.loaded() else { return };
+        let share = &l.location.share_root;
+        if let Some((row, _, px)) = &self.wave {
+            let rel = l.index.analysis_path.get(*row as usize).to_owned();
+            crate::waveform::load_into(px.clone(), share.clone(), rel, crate::ui::inspector::WAVE_PX.0, crate::ui::inspector::WAVE_PX.1);
+        }
+        if let Some(w) = &self.deck_wave
+            && let Some(row) = l.index.row_of(&w.id)
+        {
+            let rel = l.index.analysis_path.get(row as usize).to_owned();
+            crate::waveform::load_into(w.pixels.clone(), share.clone(), rel.clone(), crate::deck::WAVE_PX.0, crate::deck::WAVE_PX.1);
+            if let Some(d) = &w.detail {
+                crate::waveform::redraw_detail(d, share.clone(), rel);
+            }
+        }
+    }
+
     /// Plays or pauses the track in the details panel. `at` (0 to 1) starts it from there.
     pub fn play_focused(&mut self, at: Option<f64>, tx: &mut Tx) {
         if let Some(id) = self.table.cursor().map(str::to_owned) {

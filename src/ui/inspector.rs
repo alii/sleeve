@@ -112,9 +112,8 @@ pub fn build(s: &App, wave_size: Option<[f32; 2]>, k: &Kit) -> El {
 
 fn wave(s: &App, unanalysed: bool, size: Option<[f32; 2]>, k: &Kit) -> El {
     let c = &k.c;
-    // The waveform sits on a dark panel in both themes, like a player's screen: its white
-    // highs would vanish on a light one.
-    let screen = rune::oklch(0.17, 0.005, 260.0);
+    // The same screen as the deck's, dark or light with the theme.
+    let screen = crate::ui::deck::screen();
     let frame = el().key("insp-wave").w_full().h(WAVE_H).radius(k.radius.md).fill(if unanalysed { c.layer_01 } else { screen }).border(1.0, c.border_muted).clip_rounded(k.radius.md);
     if unanalysed {
         return frame.child(
@@ -148,7 +147,7 @@ fn wave(s: &App, unanalysed: bool, size: Option<[f32; 2]>, k: &Kit) -> El {
         let crate::ui::deck::Head { line: head, played } = crate::ui::deck::head(s, "insp-wave", s.deck_duration_ms().unwrap_or(0.0), w, h, 1.5);
         strip = strip
             .child(el().key("insp-played").absolute(0.0, 0.0).size(0.0, h).fill(screen.alpha(0.6)).live_rect(&played).inert())
-            .child(el().key("insp-head").absolute(0.0, 0.0).size(1.5, h).fill(rune::Color::WHITE).live_rect(&head).inert());
+            .child(el().key("insp-head").absolute(0.0, 0.0).size(1.5, h).fill(crate::ui::deck::screen_ink()).live_rect(&head).inert());
     }
     strip = strip.on_drag(|s: &mut App, d: &mut rune::Drag, tx: &mut rune::Tx| {
         if d.w <= 0.0 {
@@ -172,11 +171,11 @@ fn wave(s: &App, unanalysed: bool, size: Option<[f32; 2]>, k: &Kit) -> El {
         .radius(6.0)
         .center()
         .cursor(rune::Cursor::Pointer)
-        .hover(rune::Color::WHITE.alpha(0.08))
+        .hover(crate::ui::deck::screen_ink().alpha(0.08))
         .child(if downloading {
-            rune_kit::Spinner::new().size(12.0).color(rune::Color::WHITE.alpha(0.8)).build(k).key("insp-downloading")
+            rune_kit::Spinner::new().size(12.0).color(crate::ui::deck::screen_ink().alpha(0.8)).build(k).key("insp-downloading")
         } else {
-            rune::icon(if playing { &icons::PAUSE } else { &icons::PLAY }, 14.0).color(rune::Color::WHITE.alpha(0.9))
+            rune::icon(if playing { &icons::PAUSE } else { &icons::PLAY }, 14.0).color(crate::ui::deck::screen_ink().alpha(0.9))
         })
         .on_press_tx(|s: &mut App, tx| s.play_focused(None, tx));
     frame.child(row().w_full().h_full().center_y().pl(4.0).pr(8.0).gap(2.0).child(play).child(strip))

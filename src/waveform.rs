@@ -2,13 +2,27 @@
 //! thread.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rune::Pixels;
 
-/// rekordbox's band colours: lows blue, mids amber, highs white.
-const LOW: [f32; 3] = [0.0, 85.0, 225.0];
-const MID: [f32; 3] = [255.0, 166.0, 0.0];
-const HIGH: [f32; 3] = [255.0, 255.0, 255.0];
+/// rekordbox's band colours on its dark screen: lows blue, mids amber, highs white.
+const DARK: [[f32; 3]; 3] = [[0.0, 85.0, 225.0], [255.0, 166.0, 0.0], [255.0, 255.0, 255.0]];
+/// The same on a light screen. White highs would vanish there, so they're near black, and the
+/// blue and amber are a little deeper.
+const LIGHT: [[f32; 3]; 3] = [[40.0, 110.0, 235.0], [245.0, 145.0, 0.0], [28.0, 32.0, 48.0]];
+
+/// Whether waveforms draw for the light theme. The view sets it from the system's appearance.
+static LIGHT_THEME: AtomicBool = AtomicBool::new(false);
+
+pub fn light() -> bool {
+    LIGHT_THEME.load(Ordering::Relaxed)
+}
+
+/// Follows the window's theme. True when it changed, so the waveforms need drawing again.
+pub fn follow_theme(dark: bool) -> bool {
+    LIGHT_THEME.swap(!dark, Ordering::Relaxed) == dark
+}
 
 /// The three bands per column, 0 to 127, or None when the track has no 3-band analysis.
 pub fn read(share_root: &Path, analysis_path: &str) -> Option<Vec<[u8; 3]>> {
@@ -79,6 +93,27 @@ pub fn load_detail(share_root: &Path, analysis_path: &str) -> Option<Detail> {
     let cols: Vec<[u8; 3]> = bytes.chunks_exact(stride as usize).map(|c| [c[0], c[1], c[2]]).collect();
     let tiles: Vec<Pixels> = (0..cols.len().div_ceil(TILE)).map(|_| Pixels::new()).collect();
     let out = Detail { tiles: tiles.clone(), cols: cols.len() };
+    draw_detail(tiles, cols);
+    Some(out)
+}
+
+/// Draws the detailed waveform again into `detail`'s tiles, for a new theme. Reads the disk on
+/// a worker, so it's fine to call from the view.
+pub fn redraw_detail(detail: &Detail, share_root: std::path::PathBuf, analysis_path: String) {
+    let tiles = detail.tiles.clone();
+    std::thread::spawn(move || {
+        let dat = rbl_anlz::resolve(&share_root, &analysis_path);
+        let Ok(anlz) = rbl_anlz::Anlz::read(&rbl_anlz::sibling(&dat, "2EX")) else { return };
+        let Some((stride, bytes)) = anlz.waveform(b"PWV7").filter(|w| w.0 >= 3) else { return };
+        let cols: Vec<[u8; 3]> = bytes.chunks_exact(stride as usize).map(|c| [c[0], c[1], c[2]]).collect();
+        if cols.len().div_ceil(TILE) == tiles.len() {
+            draw_detail(tiles, cols);
+        }
+    });
+}
+
+/// Draws the detailed waveform's tiles on another worker.
+fn draw_detail(tiles: Vec<Pixels>, cols: Vec<[u8; 3]>) {
     std::thread::spawn(move || {
         // One gain for the whole track, so tiles meet without a seam.
         let peak = cols.iter().map(|c| c[0].max(c[1]).max(c[2])).max().unwrap_or(1).max(1);
@@ -92,14 +127,14 @@ pub fn load_detail(share_root: &Path, analysis_path: &str) -> Option<Detail> {
             tile.set(part.len() as u32, DETAIL_H as u32, px);
         }
     });
-    Some(out)
 }
 
 /// Draws one column's three bands, mirrored about the middle, lows under mids under highs.
 fn paint(px: &mut [u8], w: usize, h: usize, x: usize, band: [u8; 3], gain: f32) {
     let mid = h as f32 / 2.0;
     let heights = [f32::from(band[0]) * gain / 127.0, f32::from(band[1]) * gain / 150.0, f32::from(band[2]) * gain / 190.0];
-    for (i, colour) in [LOW, MID, HIGH].iter().enumerate() {
+    let colours = if light() { &LIGHT } else { &DARK };
+    for (i, colour) in colours.iter().enumerate() {
         let half = (heights[i].min(1.0) * mid).max(if band[i] > 0 { 0.5 } else { 0.0 });
         let (top, bottom) = ((mid - half).floor() as usize, ((mid + half).ceil() as usize).min(h));
         for y in top..bottom {

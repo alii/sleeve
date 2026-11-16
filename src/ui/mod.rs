@@ -23,6 +23,10 @@ pub fn kit(dark: bool) -> &'static Kit {
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let k = kit(cx.system_dark());
+    // The waveforms are pixels drawn in the theme's colours, so a new theme draws them again.
+    if crate::waveform::follow_theme(cx.system_dark()) {
+        s.redraw_waves();
+    }
     let c = &k.c;
 
     let main: El = match &s.lib {

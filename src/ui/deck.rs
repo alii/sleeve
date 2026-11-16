@@ -32,9 +32,15 @@ pub fn memory_mark() -> El {
     rune::canvas(rune::Shape::new().fill(vec![[0.0, 0.0], [10.0, 0.0], [5.0, 7.0]], memory_colour()).view_box(10.0, 7.0)).size(10.0, 7.0)
 }
 
-/// The panel's dark "screen", the same in both themes, as a player's display is.
+/// The waveforms' "screen": dark like a player's display in the dark theme, and light in the
+/// light one, where a black slab looks out of place.
 pub fn screen() -> Color {
-    oklch(0.17, 0.005, 260.0)
+    if crate::waveform::light() { oklch(0.965, 0.004, 260.0) } else { oklch(0.17, 0.005, 260.0) }
+}
+
+/// Lines and labels drawn on the screen: white on the dark one, near black on the light one.
+pub fn screen_ink() -> Color {
+    if crate::waveform::light() { oklch(0.2, 0.01, 260.0) } else { Color::WHITE }
 }
 
 /// The deck's moving parts for the player's current anchor. Each glides from the anchor at
@@ -475,7 +481,7 @@ fn wave(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue], 
                 );
         }
     }
-    strip = strip.child(el().key("deck-head").absolute(0.0, 0.0).size(2.0, WAVE_H).fill(Color::WHITE).live_rect(&head).inert());
+    strip = strip.child(el().key("deck-head").absolute(0.0, 0.0).size(2.0, WAVE_H).fill(screen_ink()).live_rect(&head).inert());
     strip.on_drag(|s: &mut App, d: &mut Drag, tx: &mut Tx| {
         if d.w <= 0.0 {
             return;
@@ -499,7 +505,7 @@ fn grid(beats: &[rbl_anlz::Beat], total_ms: f64) -> El {
         bar += 1;
         let x = (f64::from(b.time_ms) / total_ms) as f32 * W;
         let phrase = bar % 4 == 1;
-        let ink = Color::WHITE.alpha(if phrase { 0.32 } else { 0.12 });
+        let ink = screen_ink().alpha(if phrase { 0.32 } else { 0.12 });
         shape = shape.line([x, 0.0], [x, H], if phrase { 1.4 } else { 1.0 }, rune::LineCap::Butt, ink);
     }
     rune::canvas(shape.view_box(W, H))
@@ -537,7 +543,7 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
         }
     } else {
         strip = strip.child(
-            row().w_full().h_full().center().inert().child(text(if total_ms > 0.0 { "Analyse this track to zoom in on it" } else { "" }).font(k.ty.small).color(Color::WHITE.alpha(0.5))),
+            row().w_full().h_full().center().inert().child(text(if total_ms > 0.0 { "Analyse this track to zoom in on it" } else { "" }).font(k.ty.small).color(screen_ink().alpha(0.5))),
         );
     }
     // The grid: a line per beat, brighter on the bar, with bar numbers along the top.
@@ -555,13 +561,13 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
         let key = format!("deck-zoom-beat-{}", from + i);
         if b.beat_number == 1 {
             bar += 1;
-            world = world.child(el().key(key).absolute(x - 0.75, 0.0).size(1.5, ZOOM_H).fill(Color::WHITE.alpha(0.55)));
+            world = world.child(el().key(key).absolute(x - 0.75, 0.0).size(1.5, ZOOM_H).fill(screen_ink().alpha(0.55)));
             if (bar - 1) % every == 0 {
-                world = world.child(text(bar.to_string()).key(format!("deck-zoom-bar-{bar}")).font(rune::TextStyle { size: 10.0, ..k.ty.small_medium.features("'tnum' 1") }).color(Color::WHITE.alpha(0.7)).absolute(x + 4.0, 3.0));
+                world = world.child(text(bar.to_string()).key(format!("deck-zoom-bar-{bar}")).font(rune::TextStyle { size: 10.0, ..k.ty.small_medium.features("'tnum' 1") }).color(screen_ink().alpha(0.7)).absolute(x + 4.0, 3.0));
             }
         } else if pps * 0.25 > 6.0 {
             // Beats only once they're far enough apart to read.
-            world = world.child(el().key(key).absolute(x - 0.5, 0.0).size(1.0, ZOOM_H).fill(Color::WHITE.alpha(0.2)));
+            world = world.child(el().key(key).absolute(x - 0.5, 0.0).size(1.0, ZOOM_H).fill(screen_ink().alpha(0.2)));
         }
     }
     // Hot cues: a full-height line and a lettered flag.
@@ -606,7 +612,7 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .radius(6.0)
             .center_y()
             .fill(screen())
-            .child(text(format!("Drag to slide · {STRETCH_KEY}-drag to stretch")).font(k.ty.small).color(Color::WHITE.alpha(0.7)));
+            .child(text(format!("Drag to slide · {STRETCH_KEY}-drag to stretch")).font(k.ty.small).color(screen_ink().alpha(0.7)));
         if g.changed() {
             bar = bar.child(
                 row()
@@ -615,13 +621,13 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
                     .px(6.0)
                     .radius(4.0)
                     .center()
-                    .fill(Color::WHITE.alpha(0.08))
-                    .hover(Color::WHITE.alpha(0.16))
+                    .fill(screen_ink().alpha(0.08))
+                    .hover(screen_ink().alpha(0.16))
                     .cursor(rune::Cursor::Pointer)
                     .role("button")
                     .label("Revert to the saved grid")
                     .help("Revert to the saved grid")
-                    .child(text("Revert").font(k.ty.small_medium).color(Color::WHITE.alpha(0.85)))
+                    .child(text("Revert").font(k.ty.small_medium).color(screen_ink().alpha(0.85)))
                     .on_press(|s: &mut App| s.revert_grid()),
             );
         }
@@ -638,13 +644,13 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .size(22.0, 18.0)
             .radius(4.0)
             .center()
-            .fill(Color::WHITE.alpha(0.08))
-            .hover(Color::WHITE.alpha(0.16))
+            .fill(screen_ink().alpha(0.08))
+            .hover(screen_ink().alpha(0.16))
             .cursor(rune::Cursor::Pointer)
             .role("button")
             .label(help)
             .help(help)
-            .child(text(label).font(k.ty.small_medium).color(Color::WHITE.alpha(0.85)))
+            .child(text(label).font(k.ty.small_medium).color(screen_ink().alpha(0.85)))
             .on_press(move |s: &mut App| s.zoom(step))
     };
     strip = strip.child(
