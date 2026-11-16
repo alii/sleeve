@@ -73,6 +73,7 @@ pub fn label(col: &str, value: &str) -> String {
         ("rating", "1") => "1 star".to_owned(),
         ("rating", n) => format!("{n} stars"),
         ("key", "") => "No key".to_owned(),
+        ("key", v) => crate::ui::tracks::note_name(v).map_or_else(|| v.to_owned(), |name| format!("{v} · {name}")),
         ("album", "") => "No album".to_owned(),
         ("artist", "") => "No artist".to_owned(),
         ("genre", "") => "No genre".to_owned(),

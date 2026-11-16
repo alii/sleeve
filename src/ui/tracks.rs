@@ -26,7 +26,7 @@ fn columns(s: &App) -> Vec<(TableColumn, f32, u8)> {
         (TableColumn::new("album", t("album", "Album")).flex(1.2).min(80.0).sortable(), 80.0, 3),
         (TableColumn::new("genre", t("genre", "Genre")).flex(0.9).min(64.0).max(220.0).sortable(), 64.0, 5),
         (TableColumn::new("bpm", t("bpm", "BPM")).width(64.0 + dot("bpm")).min(56.0).max(90.0).align(Align::End).sortable(), 64.0, 2),
-        (TableColumn::new("key", t("key", "Key")).width(56.0 + dot("key")).min(48.0).max(90.0).align(Align::Center).sortable(), 56.0, 2),
+        (TableColumn::new("key", t("key", "Key")).width(92.0 + dot("key")).min(48.0).max(130.0).align(Align::Center).sortable(), 92.0, 2),
         (TableColumn::new("time", "Time").width(58.0).min(52.0).max(90.0).align(Align::End).sortable(), 58.0, 3),
         (TableColumn::new("rating", t("rating", "Rating")).width(78.0 + dot("rating")).resizable(false).sortable(), 78.0, 4),
         (TableColumn::new("added", "Added").width(104.0).min(96.0).max(140.0).sortable(), 104.0, 6),
@@ -125,7 +125,10 @@ fn cell(s: &App, i: usize, col: &str, k: &Kit) -> Cell {
     match col {
         "bpm" => Cell::el(num(library::bpm(f.bpm_x100), k.c.text_base, k)),
         "key" => match camelot(f.key, k.dark) {
-            Some((label, ink)) => Cell::el(key_pill(label, ink, k)),
+            Some((label, ink)) => {
+                let name = note_name(&label).unwrap_or_default();
+                Cell::el(key_pill(label, name, ink, k))
+            }
             None => Cell::text(f.key).muted(),
         },
         "time" => Cell::el(num(library::duration(f.length_sec), k.c.text_muted, k)),
@@ -184,16 +187,35 @@ fn stars(n: u8, k: &Kit) -> El {
     })
 }
 
-/// A key in Camelot notation, tinted with its place on the wheel so keys that mix well share a
-/// colour family.
-fn key_pill(label: String, ink: Color, k: &Kit) -> El {
+/// A key in Camelot notation with its note name beside it, tinted with its place on the wheel so
+/// keys that mix well share a colour family.
+fn key_pill(label: String, name: String, ink: Color, k: &Kit) -> El {
+    let font = rune::TextStyle { size: 11.0, ..k.ty.mono };
     row()
         .px(6.0)
+        .gap(5.0)
         .h(18.0)
         .center()
         .radius(4.0)
         .fill(ink.alpha(if k.dark { 0.16 } else { 0.14 }))
-        .child(text(label).font(rune::TextStyle { size: 11.0, ..k.ty.mono }).color(ink))
+        .child(text(label).font(font).color(ink))
+        .child(text(name).font(font).color(ink.alpha(0.7)))
+}
+
+/// A Camelot code ("8A", "8B") as a note name ("Am", "CMaj"). Flats everywhere except F#, the
+/// way rekordbox spells them.
+pub fn note_name(camelot: &str) -> Option<String> {
+    const NAMES: [&str; 12] = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+    // 1A to 12A as pitch classes; each B is its relative major, three semitones up.
+    const MINOR: [usize; 12] = [8, 3, 10, 5, 0, 7, 2, 9, 4, 11, 6, 1];
+    let letter = camelot.chars().last()?;
+    let num: usize = camelot.get(..camelot.len() - 1)?.parse().ok()?;
+    let minor = *MINOR.get(num.checked_sub(1)?)?;
+    match letter {
+        'A' => Some(format!("{}m", NAMES[minor])),
+        'B' => Some(format!("{}Maj", NAMES[(minor + 3) % 12])),
+        _ => None,
+    }
 }
 
 /// Converts rekordbox's key names ("Am", "F#m", "Db", "8A") to Camelot and a wheel colour.
@@ -274,7 +296,7 @@ impl StarGlyphs for Kit {
 
 #[cfg(test)]
 mod tests {
-    use super::camelot;
+    use super::{camelot, note_name};
 
     #[test]
     fn keys_map_to_camelot() {
@@ -286,5 +308,24 @@ mod tests {
         assert_eq!(camelot("Db", true).unwrap().0, "3B");
         assert_eq!(camelot("5A", true).unwrap().0, "5A");
         assert!(camelot("", true).is_none());
+    }
+
+    #[test]
+    fn camelot_maps_back_to_note_names() {
+        assert_eq!(note_name("8A").as_deref(), Some("Am"));
+        assert_eq!(note_name("8B").as_deref(), Some("CMaj"));
+        assert_eq!(note_name("1A").as_deref(), Some("Abm"));
+        assert_eq!(note_name("1B").as_deref(), Some("BMaj"));
+        assert_eq!(note_name("3A").as_deref(), Some("Bbm"));
+        assert_eq!(note_name("11A").as_deref(), Some("F#m"));
+        assert_eq!(note_name("10A").as_deref(), Some("Bm"));
+        assert_eq!(note_name("13A"), None);
+        assert_eq!(note_name("0B"), None);
+        // Every rekordbox spelling round-trips through Camelot to the same key.
+        for key in ["C", "Db", "C#m", "F#", "Gbm", "Bb", "Bbm", "B"] {
+            let code = camelot(key, true).unwrap().0;
+            let name = note_name(&code).unwrap();
+            assert_eq!(camelot(name.trim_end_matches("Maj"), true).unwrap().0, code, "{key}");
+        }
     }
 }
