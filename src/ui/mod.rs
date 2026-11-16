@@ -8,6 +8,7 @@ pub mod menus;
 pub mod sidebar;
 pub mod statusbar;
 pub mod tracks;
+pub mod update;
 
 use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
 use rune_kit::shell::{self, PaneMotion, SidebarToggle, SplitView, Toolbar};

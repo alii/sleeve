@@ -112,3 +112,27 @@ pub fn empty(s: &mut App) {
     s.search = rune::TextEdit::new("zzzz nothing");
     s.refresh_rows();
 }
+
+/// A newer build coming down in the background.
+pub fn update_downloading(s: &mut App) {
+    selected(s);
+    s.update.status = crate::update::Status::Downloading { build: 14, done: 17_400_000, total: 41_760_823 };
+}
+
+/// A newer build downloaded and checked, waiting for Restart.
+pub fn update_ready(s: &mut App) {
+    selected(s);
+    s.update.status = crate::update::Status::Ready { build: 14 };
+}
+
+/// The download failed, with a way to try again.
+pub fn update_failed(s: &mut App) {
+    selected(s);
+    s.update.status = crate::update::Status::Failed { build: 14, why: "couldn't reach GitHub. Check you're online".into() };
+}
+
+/// Sleeve is running from its disk image, so it can't replace itself.
+pub fn update_manual(s: &mut App) {
+    selected(s);
+    s.update.status = crate::update::Status::Manual { build: 14, why: "Sleeve is running from its disk image. Drag it to your Applications folder and open it from there.".into() };
+}

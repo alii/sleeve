@@ -26,6 +26,11 @@ concurrency:
 permissions:
   contents: read
 
+# The release's number, baked into the app so it knows which build it is and can update itself
+# to a newer one. A build made any other way has none and never updates.
+env:
+  SLEEVE_BUILD: ${{ github.run_number }}
+
 jobs:
   macos:
     # Xcode 26 or newer, for actool to compile the Icon Composer icon.

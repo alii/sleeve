@@ -14,7 +14,7 @@ A fast, good-looking app for your rekordbox library. Browse your tracks, analyse
 
 On a Mac, open the download and drag Sleeve into Applications. On Windows, unzip it and open Sleeve.exe. If Windows says it protected your PC, click **More info**, then **Run anyway**.
 
-There's a new version every time the code changes. See [all releases](https://github.com/alii/sleeve/releases).
+Sleeve keeps itself up to date. When there's a new version it downloads it in the background, and a card at the bottom of the sidebar asks you to restart. It never restarts by itself. To turn this off, open Sleeve with `SLEEVE_NO_UPDATES=1` set. See [all releases](https://github.com/alii/sleeve/releases).
 
 ### Build it yourself
 

@@ -15,6 +15,7 @@ mod library;
 mod metadata;
 mod player;
 mod ui;
+mod update;
 mod waveform;
 
 use rune::{AppSpec, Chrome};
@@ -46,7 +47,7 @@ fn main() {
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),
         min_size: Some((820.0, 520.0)),
-        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty)],
+        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual)],
         ..AppSpec::new("Sleeve", (1280.0, 800.0), App::new, ui::view)
     };
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((26.0, 25.0)), drag_regions: true };

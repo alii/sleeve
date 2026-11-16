@@ -11,6 +11,9 @@
 #   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER
 #                   an App Store Connect API key to notarize with instead of a profile, as CI does
 #   SKIP_NOTARIZE=1 sign only, for a quick local build
+#   SLEEVE_BUILD    the release's build number, which CI sets. It goes into the app, which
+#                   needs it to update itself, and into Info.plist as CFBundleVersion, which
+#                   the updater checks a new app by.
 
 set -eu
 cd "$(dirname "$0")/.."
@@ -60,7 +63,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>sleeve</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>${SLEEVE_BUILD:-$VERSION}</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIconName</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>

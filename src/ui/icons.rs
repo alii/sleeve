@@ -70,6 +70,12 @@ pub static DROP: Icon = Icon {
     body: r#"<path d="M8 2.5V9.5M5.25 6.75L8 9.5L10.75 6.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2.75 9.75V11.75C2.75 12.3 3.2 12.75 3.75 12.75H12.25C12.8 12.75 13.25 12.3 13.25 11.75V9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
 
+pub static UPDATE: Icon = Icon {
+    name: "sleeve-update",
+    view: 16.0,
+    body: r#"<circle cx="8" cy="8" r="5.75" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M8 10.75V5.5M5.75 7.5L8 5.25L10.25 7.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
+};
+
 pub static PLUS: Icon = Icon {
     name: "sleeve-plus",
     view: 16.0,

@@ -131,6 +131,8 @@ pub struct App {
     /// The focused track's waveform, for the library generation it was read from.
     pub wave: Option<(Row, u64, rune::Pixels)>,
     pub clock: f64,
+    /// Newer builds of Sleeve: checking, downloading, and swapping one in on Restart.
+    pub update: crate::update::Updater,
 }
 
 pub fn source_from_args() -> Source {
@@ -213,6 +215,7 @@ impl App {
             artwork: None,
             wave: None,
             clock: 0.0,
+            update: Default::default(),
         };
         // Headless runs (snapshots, scripted tests) load at once so the first frame has data.
         if rune::tooling::headless_run().is_some() {
@@ -234,6 +237,7 @@ impl App {
         }
         self.images = Some(ImageCache::new(waker.clone()));
         self.player.open(Some(waker.clone()));
+        self.update.start(waker.clone());
         self.waker = Some(waker);
         if matches!(self.lib, LibState::Loading) {
             self.start_load();
@@ -420,6 +424,29 @@ impl App {
         // Keep "running 0:42" in the Activity panel ticking.
         if self.activity_open && self.jobs.list().iter().any(crate::jobs::Job::is_active) {
             tx.wake_after(std::time::Duration::from_secs(1));
+        }
+        changed |= self.poll_update(tx);
+        changed
+    }
+
+    /// Takes in the updater's news. Restart, if it was waiting on jobs, goes once they're done.
+    /// Once the new version is in place it opens, and this one quits.
+    fn poll_update(&mut self, tx: &mut Tx) -> bool {
+        let mut changed = self.update.poll();
+        if self.update.restart_waiting && !self.jobs.list().iter().any(crate::jobs::Job::is_active) {
+            self.update.restart_now();
+            changed = true;
+        }
+        if let Some(path) = self.update.take_installed() {
+            if crate::update::relaunch(&path) {
+                tx.quit();
+            } else {
+                self.update.status = crate::update::Status::Manual {
+                    build: self.update.status.build().unwrap_or(0),
+                    why: format!("The new version is in place, but Sleeve couldn't open it. Quit and open {} yourself.", path.display()),
+                };
+            }
+            changed = true;
         }
         changed
     }

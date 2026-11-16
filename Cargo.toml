@@ -67,6 +67,14 @@ rbl-deck = { path = "crates/rbl-deck" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 
+# For updates: asks GitHub for the latest release and downloads it, over the system's own TLS
+# (Security.framework on a Mac, SChannel on Windows) and its own trusted certificates.
+ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.154"
+# Checks a download against the SHA-256 GitHub lists for it.
+sha2 = "0.10"
+
 [target.'cfg(windows)'.dependencies]
 # Finds the AppData folders. Already built for rbl-core.
 dirs = "5"

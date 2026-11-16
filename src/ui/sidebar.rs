@@ -119,6 +119,9 @@ pub fn build(s: &App, k: &Kit) -> El {
     if !s.sticks.is_empty() {
         sb = sb.section(devices);
     }
+    if let Some(card) = crate::ui::update::card(s, k) {
+        sb = sb.footer(card);
+    }
     sb.build(k)
 }
 
