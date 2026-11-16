@@ -148,3 +148,9 @@ pub fn update_check_failed(s: &mut App) {
     selected(s);
     s.update.manual = Some(crate::update::Manual::Failed("couldn't reach GitHub. Check you're online".into()));
 }
+
+/// An update ready with the sidebar closed: the card floats in the corner instead.
+pub fn update_collapsed(s: &mut App) {
+    update_ready(s);
+    s.sidebar.toggle();
+}

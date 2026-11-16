@@ -114,6 +114,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     menus::build(s, cx.window_layout("nav-new"), k, &mut layer);
     confirm(s, k, &mut layer);
     filters::popover(s, k, &mut layer);
+    // The update card lives at the foot of the sidebar. With the sidebar closed it floats in
+    // the window's bottom left corner instead, above the status bar, so it's never hidden.
+    if !s.sidebar.is_open()
+        && let Some(card) = update::card(s, k)
+    {
+        layer.push(col().key("update-float").pin(Some(16.0), None, None, Some(52.0)).w(280.0).radius(k.radius.md).shadow(8.0, 24.0, rune::Color::BLACK.alpha(0.3)).child(card));
+    }
     root = root.children(layer);
     // Songs and folders dragged in from Finder land anywhere in the window.
     root.on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), s.drop_playlist()))
