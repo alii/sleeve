@@ -134,6 +134,7 @@ fn tracks(s: &App, ids: &[String], sub: bool, menu: Menu) -> Menu {
     let n = ids.len();
     let these = songs(n);
     let analyse = s.analyse_rows().len();
+    let auto_cue = s.auto_cue_rows().len();
     let current = match s.browse {
         Browse::Playlist(id) => s.tree.iter().find(|p| p.id == id).map(|p| (id, p.name.clone(), p.kind)),
         Browse::Collection => None,
@@ -147,6 +148,7 @@ fn tracks(s: &App, ids: &[String], sub: bool, menu: Menu) -> Menu {
     });
     let mut menu = menu
         .item(act(s.analyse_label(), |s, _| s.analyse()).disabled(analyse == 0))
+        .item(act(if auto_cue == 1 { "Auto-cue 1 track".to_owned() } else { format!("Auto-cue {auto_cue} tracks") }, |s, _| s.auto_cue()).disabled(auto_cue == 0))
         .item(act(reveal, |s, _| s.show_in_finder()).disabled(n == 0))
         .separator()
         .item(add_to);

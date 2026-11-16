@@ -1,5 +1,6 @@
 mod analysis;
 mod app;
+mod autocue;
 mod deck;
 mod edits;
 mod demo;
@@ -10,6 +11,7 @@ mod filters;
 mod grid_edit;
 mod scenes;
 mod store;
+mod structure;
 mod jobs;
 mod library;
 mod metadata;
