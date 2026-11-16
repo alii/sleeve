@@ -58,7 +58,7 @@ const BUNDLE_ID: &str = "com.alii.sleeve";
 /// The first check waits a little, so it doesn't compete with the library opening.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 /// How long between checks once one has worked.
-const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+const EVERY: Duration = Duration::from_secs(60 * 60);
 /// How often the worker looks at the clock. Short, because a Mac's monotonic clock stops while
 /// it sleeps, so a single long wait could run hours late.
 const TICK: Duration = Duration::from_secs(5 * 60);
@@ -106,6 +106,15 @@ impl Status {
     }
 }
 
+/// How a check from the menu went, when it found nothing to download.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Manual {
+    Checking,
+    UpToDate,
+    /// Why it couldn't check, or why this build can't update.
+    Failed(String),
+}
+
 enum Cmd {
     /// Check now, as Try again does.
     Check,
@@ -115,6 +124,8 @@ enum Cmd {
 
 enum Msg {
     Status(Status),
+    /// A check finished: `None` if it worked, or why it didn't.
+    Checked(Option<String>),
     /// The new version is in place at this path. Open it and quit.
     Installed(PathBuf),
 }
@@ -127,6 +138,8 @@ pub struct Updater {
     pub restart_waiting: bool,
     /// "Later" was pressed for this build, so its card stays hidden until a newer one.
     pub hidden: Option<u32>,
+    /// A check asked for from the menu, so its result shows even when there's nothing new.
+    pub manual: Option<Manual>,
     cmd: Option<Sender<Cmd>>,
     rx: Option<Receiver<Msg>>,
     installed: Option<PathBuf>,
@@ -154,7 +167,20 @@ impl Updater {
         let mut changed = false;
         while let Ok(msg) = rx.try_recv() {
             match msg {
+                Msg::Checked(problem) => {
+                    if self.manual == Some(Manual::Checking) {
+                        self.manual = match (&self.status, problem) {
+                            (Status::Idle, Some(why)) => Some(Manual::Failed(why)),
+                            (Status::Idle, None) => Some(Manual::UpToDate),
+                            // Something to download or install: its own card says so.
+                            _ => None,
+                        };
+                    }
+                }
                 Msg::Status(s) => {
+                    if !matches!(s, Status::Idle) {
+                        self.manual = None;
+                    }
                     // A failed install goes back to Ready, so Restart can be pressed again.
                     if !matches!(s, Status::Ready { .. } | Status::Installing { .. }) {
                         self.restart_waiting = false;
@@ -168,8 +194,31 @@ impl Updater {
         changed
     }
 
+    /// Check now, from the menu. Unlike the checks on their own, this one always says how it
+    /// went: up to date, couldn't check, or the usual card when there's something new.
+    pub fn check_now(&mut self) {
+        if self.status.build().is_some() {
+            // Already found one: show its card again, even if Later hid it.
+            self.hidden = None;
+            return;
+        }
+        let Some(tx) = &self.cmd else {
+            self.manual = Some(Manual::Failed(match this_build() {
+                None => "This copy of Sleeve was built by hand, so it can't update itself. Download the latest from GitHub.".into(),
+                Some(_) => "Updates are turned off. Download the latest from GitHub.".into(),
+            }));
+            return;
+        };
+        if tx.send(Cmd::Check).is_ok() {
+            self.manual = Some(Manual::Checking);
+        }
+    }
+
     /// Whether the card is on screen.
     pub fn visible(&self) -> bool {
+        if self.manual.is_some() && matches!(self.status, Status::Idle) {
+            return true;
+        }
         match &self.status {
             Status::Idle => false,
             Status::Installing { .. } => true,
@@ -354,6 +403,8 @@ struct Worker {
     ready: Option<u32>,
     /// Checks that have failed in a row, for backing off.
     failures: u32,
+    /// Why the last check didn't work, for a check from the menu to show.
+    problem: Option<String>,
     cmds: Receiver<Cmd>,
     /// Restart was pressed during a download, which stopped so it could go in.
     install_asked: bool,
@@ -373,7 +424,7 @@ impl Worker {
             .max_redirects(5)
             .build()
             .new_agent();
-        Worker { dir: updates_dir(), tx, wake, agent, this: this_build().unwrap_or(0), ready: None, failures: 0, cmds, install_asked: false }
+        Worker { dir: updates_dir(), tx, wake, agent, this: this_build().unwrap_or(0), ready: None, failures: 0, problem: None, cmds, install_asked: false }
     }
 
     fn say(&self, s: Status) {
@@ -424,6 +475,8 @@ impl Worker {
             }
             first = false;
             let next = self.check_once();
+            let _ = self.tx.send(Msg::Checked(self.problem.take()));
+            (self.wake)();
             due = Instant::now() + next;
             self.save_next(next);
             if std::mem::take(&mut self.install_asked) {
@@ -450,6 +503,7 @@ impl Worker {
     fn check_once(&mut self) -> Duration {
         let Some(lock) = Lock::try_take(&self.dir) else {
             self.log("Another Sleeve is checking for updates. Trying again later.");
+            self.problem = Some("another Sleeve window is checking right now".into());
             return Duration::from_secs(10 * 60);
         };
         cleanup(&self.dir, |l| self.log(l));
@@ -463,14 +517,19 @@ impl Worker {
             Err(Error::RateLimited(until)) => {
                 let wait = until.duration_since(SystemTime::now()).unwrap_or_default().clamp(Duration::from_secs(60), EVERY);
                 self.log(format!("GitHub's rate limit is used up. Waiting {} minutes.", wait.as_secs() / 60));
+                self.problem = Some(format!("GitHub asked Sleeve to wait. Try again in {} minutes", (wait.as_secs() / 60).max(1)));
                 wait
             }
-            Err(Error::Interrupted) => Duration::from_secs(60),
+            Err(Error::Interrupted) => {
+                self.problem = Some("the check was interrupted".into());
+                Duration::from_secs(60)
+            }
             Err(Error::Failed(why)) => {
                 self.failures += 1;
                 self.log(format!("Check failed: {why}"));
-                // 5 minutes, then 15, an hour, and every 4 hours after that.
-                [5u64, 15, 60, 240].get(self.failures as usize - 1).map_or(EVERY, |m| Duration::from_secs(m * 60))
+                self.problem = Some(why);
+                // 5 minutes, then 15, and every hour after that.
+                [5u64, 15].get(self.failures as usize - 1).map_or(EVERY, |m| Duration::from_secs(m * 60))
             }
         }
     }

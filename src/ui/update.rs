@@ -6,7 +6,7 @@ use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant
 
 use crate::app::App;
 use crate::ui::icons;
-use crate::update::Status;
+use crate::update::{Manual, Status};
 
 pub fn card(s: &App, k: &Kit) -> Option<El> {
     if !s.update.visible() {
@@ -14,6 +14,9 @@ pub fn card(s: &App, k: &Kit) -> Option<El> {
     }
     let c = &k.c;
     let u = &s.update;
+    if let (Status::Idle, Some(m)) = (&u.status, &u.manual) {
+        return Some(manual_card(m, k));
+    }
     let build = u.status.build().unwrap_or(0);
     let (title, lead, ink) = match &u.status {
         Status::Idle => return None,
@@ -149,6 +152,72 @@ pub fn card(s: &App, k: &Kit) -> Option<El> {
             .child(head)
             .child(body),
     )
+}
+
+/// What a check from the menu found, when there's nothing to download.
+fn manual_card(m: &Manual, k: &Kit) -> El {
+    let c = &k.c;
+    let (title, lead) = match m {
+        Manual::Checking => ("Checking for updates…", Spinner::new().size(14.0).build(k)),
+        Manual::UpToDate => ("Sleeve is up to date", rune::icon(&icons::UPDATE, 14.0).color(c.icon_accent)),
+        Manual::Failed(_) => ("Couldn't check for updates", rune::icon(&icons::WARNING, 14.0).color(c.warning.icon)),
+    };
+    let sub = crate::update::this_build().map_or_else(|| "Built by hand".to_owned(), |b| format!("Sleeve build {b}"));
+    let close = IconButton::new(&icons::CLOSE)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(ControlSize::Small)
+        .label("Close")
+        .on_press(|s: &mut App| s.update.manual = None)
+        .build(k)
+        .key("update-later");
+    let head = row()
+        .w_full()
+        .gap(8.0)
+        .center_y()
+        .child(lead.key("update-lead"))
+        .child(
+            col()
+                .min_w(0.0)
+                .shrink()
+                .gap(1.0)
+                .child(text(title).key("update-title").font(k.ty.small_medium).color(c.text_base).truncate())
+                .child(text(sub).key("update-build").font(k.ty.small).color(c.text_faint).truncate()),
+        )
+        .child(spacer())
+        .child(close);
+    let mut card = col()
+        .key("update-card")
+        .role("status")
+        .label(title)
+        .w_full()
+        .px(10.0)
+        .py(10.0)
+        .gap(8.0)
+        .radius(k.radius.md)
+        .fill(c.layer_01)
+        .border(1.0, c.border_muted)
+        .transition(rune::Transition::offset(0.0, 8.0))
+        .child(head);
+    if let Manual::Failed(why) = m {
+        card = card.child(text(capitalise(why)).font(k.ty.small.lh(16.0)).color(c.text_muted).w_full().wrap()).child(
+            row()
+                .w_full()
+                .gap(6.0)
+                .child(
+                    Button::new("Download")
+                        .variant(ButtonVariant::Ghost)
+                        .control_size(ControlSize::Small)
+                        .on_press_tx(|_: &mut App, tx| {
+                            let _ = tx.open_url(crate::update::RELEASE_PAGE);
+                        })
+                        .build(k)
+                        .key("update-download"),
+                )
+                .child(spacer())
+                .child(Button::new("Try again").variant(ButtonVariant::Outline).control_size(ControlSize::Small).on_press(|s: &mut App| s.update.check_now()).build(k).key("update-retry")),
+        );
+    }
+    card
 }
 
 /// The reason with a capital letter, as it starts a sentence on the card.

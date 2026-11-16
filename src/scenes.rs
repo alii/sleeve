@@ -136,3 +136,15 @@ pub fn update_manual(s: &mut App) {
     selected(s);
     s.update.status = crate::update::Status::Manual { build: 14, why: "Sleeve is running from its disk image. Drag it to your Applications folder and open it from there.".into() };
 }
+
+/// Check for Updates from the menu found nothing new.
+pub fn update_current(s: &mut App) {
+    selected(s);
+    s.update.manual = Some(crate::update::Manual::UpToDate);
+}
+
+/// Check for Updates from the menu couldn't reach GitHub.
+pub fn update_check_failed(s: &mut App) {
+    selected(s);
+    s.update.manual = Some(crate::update::Manual::Failed("couldn't reach GitHub. Check you're online".into()));
+}
