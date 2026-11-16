@@ -1,3 +1,47 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+# The crates under crates/ read and write rekordbox libraries, play audio and export to USB
+# sticks. They started as part of RBXport (https://github.com/chrisle/rbxport) and live here
+# now so Sleeve can change them freely. These settings are theirs.
+[workspace.package]
+version = "1.10.0"
+edition = "2021"
+rust-version = "1.89"
+license = "GPL-2.0-or-later"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+perf = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+await_holding_lock = "deny"
+needless_pass_by_value = "deny"
+large_enum_variant = "deny"
+inefficient_to_string = "deny"
+unnecessary_to_owned = "deny"
+implicit_clone = "deny"
+cloned_instead_of_copied = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+chunks_exact_to_as_chunks = "allow"
+manual_is_multiple_of = "allow"
+
 [package]
 name = "sleeve"
 version = "0.1.0"
@@ -10,15 +54,15 @@ repository = "https://github.com/alii/sleeve"
 rune = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69", features = ["native-file-dialog"] }
 rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "5fd9bfa2ec89e6325d6435d95066336d93369d69" }
-rbl-core = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-db = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-index = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-anlz = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-audio = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-analysis = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-export = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-devices = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
-rbl-deck = { git = "https://github.com/alii/rbxport", rev = "1f53c6e44112fe82a01696abfe7d708da54a7838" }
+rbl-core = { path = "crates/rbl-core" }
+rbl-db = { path = "crates/rbl-db" }
+rbl-index = { path = "crates/rbl-index" }
+rbl-anlz = { path = "crates/rbl-anlz" }
+rbl-audio = { path = "crates/rbl-audio" }
+rbl-analysis = { path = "crates/rbl-analysis" }
+rbl-export = { path = "crates/rbl-export" }
+rbl-devices = { path = "crates/rbl-devices" }
+rbl-deck = { path = "crates/rbl-deck" }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }

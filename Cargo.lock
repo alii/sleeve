@@ -101,6 +101,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1798,6 +1807,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1972,6 +1990,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2926,22 +2953,31 @@ dependencies = [
 [[package]]
 name = "rbl-analysis"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
+ "rbl-anlz",
+ "rbl-audio",
+ "rbl-db",
+ "rbl-index",
  "realfft",
+ "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "rbl-anlz"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
+ "dirs",
  "rbl-core",
+ "rbl-db",
+ "rbl-index",
  "serde",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -2949,13 +2985,13 @@ dependencies = [
 [[package]]
 name = "rbl-audio"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "mp3lame-encoder",
  "rbl-core",
  "rubato",
  "serde",
  "symphonia",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -2963,7 +2999,6 @@ dependencies = [
 [[package]]
 name = "rbl-core"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "chrono",
  "dirs",
@@ -2980,7 +3015,6 @@ dependencies = [
 [[package]]
 name = "rbl-db"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "base64",
  "blowfish",
@@ -3004,15 +3038,17 @@ dependencies = [
 [[package]]
 name = "rbl-deck"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "cc",
  "cpal",
  "rbl-audio",
  "rbl-core",
+ "rbl-db",
+ "rbl-index",
  "rtrb",
  "rubato",
  "symphonia",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -3020,16 +3056,17 @@ dependencies = [
 [[package]]
 name = "rbl-devices"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "dirs",
  "objc2-core-foundation",
  "objc2-disk-arbitration",
+ "rbl-anlz",
  "rbl-core",
  "rbl-export",
  "rbl-onelibrary",
  "rbl-pdb",
  "sysinfo",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "windows-sys 0.61.2",
@@ -3038,15 +3075,18 @@ dependencies = [
 [[package]]
 name = "rbl-export"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "blake3",
  "fs2",
+ "rbl-analysis",
  "rbl-anlz",
  "rbl-audio",
  "rbl-core",
+ "rbl-db",
+ "rbl-index",
  "rbl-onelibrary",
  "rbl-pdb",
+ "rusqlite",
  "rustix 1.1.6",
  "serde",
  "serde_json",
@@ -3059,7 +3099,6 @@ dependencies = [
 [[package]]
 name = "rbl-index"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "crc32fast",
  "icu_collator",
@@ -3068,8 +3107,10 @@ dependencies = [
  "parking_lot",
  "rbl-core",
  "rbl-db",
+ "rbl-devices",
  "rusqlite",
  "serde",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -3077,7 +3118,6 @@ dependencies = [
 [[package]]
 name = "rbl-onelibrary"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "flate2",
  "rbl-anlz",
@@ -3091,7 +3131,6 @@ dependencies = [
 [[package]]
 name = "rbl-pdb"
 version = "1.10.0"
-source = "git+https://github.com/alii/rbxport?rev=1f53c6e44112fe82a01696abfe7d708da54a7838#1f53c6e44112fe82a01696abfe7d708da54a7838"
 dependencies = [
  "thiserror 2.0.21",
  "tracing",
@@ -3154,6 +3193,23 @@ dependencies = [
  "libredox",
  "thiserror 1.0.69",
 ]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "renderdoc-sys"
@@ -3570,6 +3626,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c187e0a369471c550af028cba56d4f4fa2a489ad28151ae95a4d340a2a8b782"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
 ]
 
 [[package]]
@@ -4106,6 +4171,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "tiff"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4295,6 +4369,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+ "valuable",
+]
+
+[[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "matchers",
+ "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
+ "sharded-slab",
+ "smallvec",
+ "thread_local",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
 ]
 
 [[package]]
@@ -4437,6 +4541,12 @@ dependencies = [
  "serde_core",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "valuable"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vcpkg"
