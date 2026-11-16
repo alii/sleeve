@@ -45,6 +45,8 @@ pub enum JobKind {
     Import,
     /// A USB stick being ejected.
     Eject,
+    /// Hot cues placed on the selected tracks.
+    AutoCue,
 }
 
 impl JobKind {
@@ -57,6 +59,7 @@ impl JobKind {
             JobKind::Edit => "change",
             JobKind::Import => "import",
             JobKind::Eject => "eject",
+            JobKind::AutoCue => "auto-cue",
         }
     }
 }

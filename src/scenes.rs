@@ -107,6 +107,12 @@ pub fn confirm(s: &mut App) {
     }
 }
 
+/// The menu beside the Analyse button, open on a selection.
+pub fn analyse_menu(s: &mut App) {
+    selected(s);
+    s.analyse_menu = true;
+}
+
 /// A search that matches nothing.
 pub fn empty(s: &mut App) {
     s.search = rune::TextEdit::new("zzzz nothing");

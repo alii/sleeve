@@ -1,5 +1,6 @@
 mod analysis;
 mod app;
+mod autocue;
 mod deck;
 mod edits;
 mod demo;
@@ -10,6 +11,7 @@ mod filters;
 mod grid_edit;
 mod scenes;
 mod store;
+mod structure;
 mod jobs;
 mod library;
 mod metadata;
@@ -47,7 +49,7 @@ fn main() {
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),
         min_size: Some((820.0, 520.0)),
-        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual), ("update-current", scenes::update_current), ("update-collapsed", scenes::update_collapsed), ("update-check-failed", scenes::update_check_failed)],
+        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("analyse-menu", scenes::analyse_menu), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual), ("update-current", scenes::update_current), ("update-collapsed", scenes::update_collapsed), ("update-check-failed", scenes::update_check_failed)],
         ..AppSpec::new("Sleeve", (1280.0, 800.0), App::new, ui::view)
     };
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((26.0, 25.0)), drag_regions: true };

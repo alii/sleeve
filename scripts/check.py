@@ -48,6 +48,8 @@ SHOTS = [
     ("renaming", "renaming", "dark", "1280x800", None),
     ("confirm", "confirm", "dark", "1280x800", None),
     ("confirm-light", "confirm", "light", "1280x800", None),
+    ("analyse-menu", "analyse-menu", "dark", "1280x800", None),
+    ("analyse-menu-narrow", "analyse-menu", "light", "900x600", None),
     ("empty", "empty", "light", "1280x800", None),
 ]
 
