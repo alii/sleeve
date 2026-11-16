@@ -100,6 +100,8 @@ pub struct App {
     pub filter_open: Option<String>,
     /// The Filter button's menu is open.
     pub filter_menu: bool,
+    /// The menu beside the Analyse button is open.
+    pub analyse_menu: bool,
     /// The right-click (or "+") menu that's open, and where.
     pub menu: Option<crate::ui::menus::OpenMenu>,
     pub filter_search: TextEdit,
@@ -195,6 +197,7 @@ impl App {
             base_rows: Vec::new(),
             filter_open: None,
             filter_menu: false,
+            analyse_menu: false,
             menu: None,
             filter_search: TextEdit::new(""),
             bpm_from: TextEdit::new(""),
