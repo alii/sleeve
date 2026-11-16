@@ -40,5 +40,5 @@ Short and plain is great. Tell us:
 
 ## Commit messages
 
-One line, all lowercase, five words at most, and no full stop. For example:
-`fix deck after eject`.
+Keep them short and simple. One line of up to about ten words is plenty, like
+`fix the deck playing after eject`.
