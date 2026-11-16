@@ -13,7 +13,7 @@ pub mod update;
 
 use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
 use rune_kit::shell::{self, PaneMotion, SidebarToggle, SplitView, Toolbar};
-use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit, TextInput};
+use rune_kit::{Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant, Kit, Menu, MenuItem, Placement, TextInput};
 
 use crate::app::{App, DropTarget, LibState};
 use crate::library::Browse;
@@ -79,6 +79,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .on_press(|s: &mut App| s.inspector.toggle())
         .build(k)
         .key("inspector-toggle");
+    // Overlays (the toolbar's menus, the filter popover, the confirm dialog) go on one layer
+    // above everything. Made here, as the toolbar's buttons put their menus on it.
+    let mut layer = Vec::new();
     let n = s.analyse_rows().len();
     let fresh = s.selected_rows().is_empty();
     let analyse = Button::new(s.analyse_label())
@@ -90,12 +93,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     .on_press(|s: &mut App| s.analyse())
     .build(k)
     .key("analyse");
-    // Overlays (the Filter menu, the filter popover, the confirm dialog) go on one layer above
-    // everything. Made here, as the toolbar's Filter button puts its menu on it.
-    let mut layer = Vec::new();
     // The frame inset round the main pane. It also pushes the title bar row down.
     let frame = 8.0;
     let chrome = titlebar::build(s, cx, k, frame, &mut layer);
+    // The chevron sits flush against Analyse, so the two read as one split button.
+    let analyse = row().center_y().child(analyse).child(analyse_more(s, k, &mut layer));
     let filter = filters::button(s, k, &mut layer);
     // On Windows the caption buttons sit over the window's top-right corner. With the inspector
     // open they're over its top, which starts lower; with it closed, over the toolbar's end,
@@ -145,6 +147,30 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     root.on_drop_files(|s: &mut App, files, _| s.import(files.to_vec(), s.drop_playlist()))
         .accepts_files(crate::import::accepts)
         .on_drop_hover(|s: &mut App, over, _| s.drop_over = over.then_some(DropTarget::Library))
+}
+
+/// The chevron beside Analyse, and its menu of the other things to do with the selection.
+fn analyse_more(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    let trigger = IconButton::new(&rune_kit::glyphs::CHEVRON_DOWN)
+        .variant(IconButtonVariant::GhostMuted)
+        .expanded(s.analyse_menu)
+        .label("More analysis")
+        .on_press(|s: &mut App| s.analyse_menu ^= true)
+        .build(k)
+        .key("analyse-more");
+    let n = s.auto_cue_rows().len();
+    let auto_cue = MenuItem::new(match n {
+        0 => "Auto-cue".to_owned(),
+        1 => "Auto-cue 1 track".to_owned(),
+        n => format!("Auto-cue {n} tracks"),
+    })
+    .description(if n == 0 { "Select tracks to place hot cues on them" } else { "Fills the empty hot cue pads" })
+    .disabled(n == 0)
+    .on_select(|s: &mut App| {
+        s.analyse_menu = false;
+        s.auto_cue();
+    });
+    Menu::new("analyse-menu").trigger(trigger).placement(Placement::BottomEnd).min_width(280.0).open(s.analyse_menu).on_close(|s: &mut App| s.analyse_menu = false).item(auto_cue).build(k, layer)
 }
 
 /// The question before anything is deleted: what goes, what stays, and a red button.
