@@ -78,9 +78,10 @@ pub struct Detail {
     pub cols: usize,
 }
 
-/// Reads the detailed three-band waveform (`PWV7`) and starts drawing its tiles on another
-/// worker. Call it off the main thread: it reads the disk.
-pub fn load_detail(share_root: &Path, analysis_path: &str) -> Option<Detail> {
+/// The detailed waveform's three bands per column (`PWV7`, `DETAIL_PER_SEC` a second), without
+/// drawing anything, or None when the track has none. Call it off the main thread: it reads
+/// the disk.
+pub fn read_detail(share_root: &Path, analysis_path: &str) -> Option<Vec<[u8; 3]>> {
     if analysis_path.is_empty() {
         return None;
     }
@@ -90,7 +91,13 @@ pub fn load_detail(share_root: &Path, analysis_path: &str) -> Option<Detail> {
     if stride < 3 {
         return None;
     }
-    let cols: Vec<[u8; 3]> = bytes.chunks_exact(stride as usize).map(|c| [c[0], c[1], c[2]]).collect();
+    Some(bytes.chunks_exact(stride as usize).map(|c| [c[0], c[1], c[2]]).collect())
+}
+
+/// Reads the detailed three-band waveform (`PWV7`) and starts drawing its tiles on another
+/// worker. Call it off the main thread: it reads the disk.
+pub fn load_detail(share_root: &Path, analysis_path: &str) -> Option<Detail> {
+    let cols = read_detail(share_root, analysis_path)?;
     let tiles: Vec<Pixels> = (0..cols.len().div_ceil(TILE)).map(|_| Pixels::new()).collect();
     let out = Detail { tiles: tiles.clone(), cols: cols.len() };
     draw_detail(tiles, cols);

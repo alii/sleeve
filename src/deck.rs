@@ -160,7 +160,9 @@ pub fn retempo(beats: &[rbl_anlz::Beat], pivot: usize, bpm: f64, track_ms: f64) 
     fit_grid(beats, (pivot, t), Some((other, t + (other as f64 - pivot as f64) * gap)), track_ms)
 }
 
-fn read_beats(share: &std::path::Path, rel: &str) -> Vec<rbl_anlz::Beat> {
+/// A track's beat grid from its analysis file, in time order. Empty if it has none. Reads the
+/// disk, so never on the main thread.
+pub(crate) fn read_beats(share: &std::path::Path, rel: &str) -> Vec<rbl_anlz::Beat> {
     if rel.is_empty() {
         return Vec::new();
     }
