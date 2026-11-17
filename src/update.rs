@@ -1,7 +1,7 @@
 //! Keeps Sleeve up to date from its GitHub releases.
 //!
-//! A release build knows its own number, baked in by CI as `SLEEVE_BUILD`. A worker thread asks
-//! GitHub for the latest release when Sleeve opens and every few hours after. When there's a
+//! A release build knows its own number, baked in by CI as `SLEEVE_BUILD`. A worker thread reads
+//! the latest release's `latest.json` when Sleeve opens and every hour after. When there's a
 //! newer build it downloads it in the background, checks it, and gets it ready beside the app.
 //! Nothing changes until you press Restart: then the new version is swapped in and opened, and
 //! this one quits. A build without a number, such as `cargo run`, never updates.
@@ -14,8 +14,11 @@
 //!   restart, as long as the file it was writing is still there.
 //! - **Captive portals and broken downloads.** A login page instead of JSON fails to parse. A
 //!   file is only used if its size and SHA-256 match what GitHub lists for it.
-//! - **Rate limits.** GitHub allows 60 unsigned requests an hour. Checks are hours apart, send
-//!   the last answer's ETag so an unchanged answer doesn't count, and wait out a limit if hit.
+//! - **Rate limits.** GitHub's API allows 60 unsigned requests an hour, shared by everything on
+//!   the same internet connection, so other apps can use them all up. Sleeve reads `latest.json`,
+//!   a file the release workflow uploads with each release, which has no such limit. It asks the
+//!   API only for a release made before there was one, sending the last answer's ETag so an
+//!   unchanged answer doesn't count, and waits out a limit if hit.
 //! - **Anything but our own app.** On a Mac the new app must pass `codesign --verify --strict`,
 //!   be signed by Sleeve's own Developer ID team and say it's the build it should be.
 //! - **Two Sleeves at once.** A lock file lets one of them check, download or install at a time.
@@ -35,6 +38,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rune::Waker;
 use serde::{Deserialize, Serialize};
 
+/// The latest release's `latest.json`: its build number, and each file's size and SHA-256.
+const MANIFEST: &str = "https://github.com/alii/sleeve/releases/latest/download/latest.json";
+/// GitHub's API, for a latest release without a `latest.json`.
 const LATEST: &str = "https://api.github.com/repos/alii/sleeve/releases/latest";
 /// Where a release's files are downloaded from. Anything else GitHub's answer points at is
 /// refused.
@@ -353,6 +359,40 @@ fn parse_release(body: &str) -> Result<Option<Release>, String> {
     Ok(Some(Release { build, url: a.browser_download_url.clone(), size: a.size, sha256: sha256.to_ascii_lowercase() }))
 }
 
+/// The latest release's `latest.json`, which the release workflow writes.
+#[derive(Deserialize)]
+struct Manifest {
+    build: u32,
+    files: std::collections::HashMap<String, ManifestFile>,
+}
+
+#[derive(Deserialize)]
+struct ManifestFile {
+    size: u64,
+    sha256: String,
+}
+
+/// Reads `latest.json`. `Ok(None)` means the release has no file for this system.
+fn parse_manifest(body: &str) -> Result<Option<Release>, String> {
+    let m: Manifest = serde_json::from_str(body).map_err(|e| format!("the release's latest.json wasn't readable ({e}). A Wi-Fi login page can do this."))?;
+    if m.build == 0 {
+        return Err("the release's latest.json has no build number".into());
+    }
+    let Some(f) = m.files.get(ASSET).filter(|f| f.size > 0) else { return Ok(None) };
+    if f.sha256.len() != 64 || !f.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("the release's latest.json has no proper SHA-256 for the download, so it can't be checked".into());
+    }
+    Ok(Some(Release { build: m.build, url: format!("{DOWNLOADS}build-{}/{ASSET}", m.build), size: f.size, sha256: f.sha256.to_ascii_lowercase() }))
+}
+
+/// Why GitHub said no, when it's asking Sleeve to wait. `None` for any other no.
+fn rate_limit(status: u16, header: impl Fn(&str) -> Option<String>) -> Option<SystemTime> {
+    let now = SystemTime::now();
+    let reset = header("x-ratelimit-reset").and_then(|s| s.parse::<u64>().ok()).map(|t| UNIX_EPOCH + Duration::from_secs(t));
+    let after = header("retry-after").and_then(|s| s.parse::<u64>().ok()).map(|s| now + Duration::from_secs(s));
+    (header("x-ratelimit-remaining").as_deref() == Some("0") || after.is_some() || status == 429).then(|| after.or(reset).unwrap_or(now + Duration::from_secs(60 * 60)))
+}
+
 /// What the worker remembers between runs, shared by every Sleeve on this computer.
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
@@ -591,8 +631,29 @@ impl Worker {
         let _ = fs::remove_file(&tmp);
     }
 
-    /// Asks GitHub for the latest release.
+    /// Finds the latest release: from its `latest.json`, or from GitHub's API for a release
+    /// made before there was one.
     fn latest(&mut self) -> Result<Option<Release>, Error> {
+        let mut resp = self.agent.get(MANIFEST).call().map_err(net)?;
+        let status = resp.status().as_u16();
+        let headers = resp.headers().clone();
+        let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        match status {
+            200 => {
+                let body = resp.body_mut().with_config().limit(64 * 1024).read_to_string().map_err(net)?;
+                Ok(parse_manifest(&body)?)
+            }
+            404 => {
+                self.log("The latest release has no latest.json. Asking GitHub's API instead.");
+                self.latest_from_api()
+            }
+            403 | 429 => Err(rate_limit(status, header).map_or_else(|| Error::Failed(format!("GitHub said no ({status})")), Error::RateLimited)),
+            s => Err(Error::Failed(format!("GitHub answered {s}"))),
+        }
+    }
+
+    /// Asks GitHub's API for the latest release.
+    fn latest_from_api(&mut self) -> Result<Option<Release>, Error> {
         let mut saved = self.load();
         let mut req = self.agent.get(LATEST).header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28");
         if let (Some(etag), Some(_)) = (&saved.etag, &saved.body) {
@@ -612,15 +673,7 @@ impl Worker {
                 self.save(&saved);
                 body
             }
-            403 | 429 => {
-                let now = SystemTime::now();
-                let reset = header("x-ratelimit-reset").and_then(|s| s.parse::<u64>().ok()).map(|t| UNIX_EPOCH + Duration::from_secs(t));
-                let after = header("retry-after").and_then(|s| s.parse::<u64>().ok()).map(|s| now + Duration::from_secs(s));
-                if header("x-ratelimit-remaining").as_deref() == Some("0") || after.is_some() || status == 429 {
-                    return Err(Error::RateLimited(after.or(reset).unwrap_or(now + Duration::from_secs(60 * 60))));
-                }
-                return Err(Error::Failed(format!("GitHub said no ({status})")));
-            }
+            403 | 429 => return Err(rate_limit(status, header).map_or_else(|| Error::Failed(format!("GitHub said no ({status})")), Error::RateLimited)),
             s => return Err(Error::Failed(format!("GitHub answered {s}"))),
         };
         Ok(parse_release(&body)?)
@@ -1218,6 +1271,28 @@ mod tests {
         assert!(parse_release(&release_json("build-12", ASSET, "uploaded", Some("sha256:nothex"), &url)).is_err());
         assert!(parse_release(&release_json("build-12", ASSET, "uploaded", Some(HASH), "https://example.com/Sleeve.dmg")).is_err());
         assert!(parse_release(&release_json("v1.0", ASSET, "uploaded", Some(HASH), &url)).is_err());
+    }
+
+    fn manifest_json(build: u32, asset: &str, sha256: &str) -> String {
+        serde_json::json!({ "build": build, "files": { asset: { "size": 123, "sha256": sha256 } } }).to_string()
+    }
+
+    #[test]
+    fn reads_latest_json() {
+        let r = parse_manifest(&manifest_json(14, ASSET, &HASH[7..].to_ascii_uppercase())).unwrap().unwrap();
+        assert_eq!(r, Release { build: 14, url: format!("{DOWNLOADS}build-14/{ASSET}"), size: 123, sha256: HASH[7..].into() });
+    }
+
+    #[test]
+    fn latest_json_without_this_systems_file() {
+        assert_eq!(parse_manifest(&manifest_json(14, "Other.zip", &HASH[7..])).unwrap(), None);
+    }
+
+    #[test]
+    fn refuses_latest_json_it_cant_check() {
+        assert!(parse_manifest(&manifest_json(14, ASSET, "nothex")).is_err());
+        assert!(parse_manifest(&manifest_json(0, ASSET, &HASH[7..])).is_err());
+        assert!(parse_manifest("<html><body>Sign in to the Wi-Fi</body></html>").is_err());
     }
 
     #[test]

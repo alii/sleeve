@@ -110,11 +110,19 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # What Sleeve's updater reads to find a new build. A release file, unlike GitHub's API,
+      # has no limit of 60 requests an hour.
+      - name: Write latest.json
+        run: |
+          file() { jq -n --arg sha "$(sha256sum "$1" | cut -d' ' -f1)" --argjson size "$(stat -c%s "$1")" '{size: $size, sha256: $sha}'; }
+          jq -n --argjson build "${{ github.run_number }}" --argjson dmg "$(file Sleeve.dmg)" --argjson win "$(file Sleeve-windows.zip)" \
+            '{build: $build, files: {"Sleeve.dmg": $dmg, "Sleeve-windows.zip": $win}}' > latest.json
+          cat latest.json
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "build-${{ github.run_number }}" Sleeve.dmg Sleeve-windows.zip \
+          gh release create "build-${{ github.run_number }}" Sleeve.dmg Sleeve-windows.zip latest.json \
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --title "Sleeve build ${{ github.run_number }}" \
