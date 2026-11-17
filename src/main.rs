@@ -8,8 +8,10 @@ mod import;
 mod export;
 mod filters;
 mod grid_edit;
+mod ramp_edit;
 mod scenes;
 mod store;
+mod tempo_ramp;
 mod jobs;
 mod library;
 mod metadata;
@@ -47,7 +49,7 @@ fn main() {
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),
         min_size: Some((820.0, 520.0)),
-        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-preparing", scenes::update_preparing), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual), ("update-current", scenes::update_current), ("update-collapsed", scenes::update_collapsed), ("update-check-failed", scenes::update_check_failed), ("windows-titlebar", scenes::windows_titlebar), ("windows-menu", scenes::windows_menu), ("windows-collapsed", scenes::windows_collapsed), ("windows-no-inspector", scenes::windows_no_inspector)],
+        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-preparing", scenes::update_preparing), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual), ("update-current", scenes::update_current), ("update-collapsed", scenes::update_collapsed), ("update-check-failed", scenes::update_check_failed), ("windows-titlebar", scenes::windows_titlebar), ("windows-menu", scenes::windows_menu), ("windows-collapsed", scenes::windows_collapsed), ("windows-no-inspector", scenes::windows_no_inspector), ("ramp", scenes::ramp), ("ramp-unplaced", scenes::ramp_unplaced), ("ramp-undone", scenes::ramp_undone), ("ramp-warped", scenes::ramp_warped), ("ramp-found", scenes::ramp_found), ("ramp-reopened", scenes::ramp_reopened), ("ramp-bent", scenes::ramp_bent), ("ramp-reset", scenes::ramp_reset), ("ramp-instant", scenes::ramp_instant), ("ramp-instant-found", scenes::ramp_instant_found)],
         ..AppSpec::new("Sleeve", (1280.0, 800.0), App::new, ui::view)
     };
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((26.0, 25.0)), drag_regions: true };

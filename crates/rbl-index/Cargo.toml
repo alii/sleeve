@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 rbl-core = { path = "../rbl-core" }
 rbl-db = { path = "../rbl-db" }
+# The beat type the XML export's `TEMPO` entries are made from. rbl-db already depends on it.
+rbl-anlz = { path = "../rbl-anlz" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
