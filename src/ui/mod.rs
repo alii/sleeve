@@ -7,6 +7,7 @@ pub mod inspector;
 pub mod menus;
 pub mod sidebar;
 pub mod statusbar;
+pub mod titlebar;
 pub mod tracks;
 pub mod update;
 
@@ -92,18 +93,31 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // Overlays (the Filter menu, the filter popover, the confirm dialog) go on one layer above
     // everything. Made here, as the toolbar's Filter button puts its menu on it.
     let mut layer = Vec::new();
+    // The frame inset round the main pane. It also pushes the title bar row down.
+    let frame = 8.0;
+    let chrome = titlebar::build(s, cx, k, frame, &mut layer);
     let filter = filters::button(s, k, &mut layer);
+    // On Windows the caption buttons sit over the window's top-right corner. With the inspector
+    // open they're over its top, which starts lower; with it closed, over the toolbar's end,
+    // which makes room.
+    let caption = chrome.as_ref().map(|ch| ch.caption);
+    let clear_caption = caption.filter(|_| !s.inspector.is_open()).map(|(w, _)| el().key("caption-clear").w((w - frame).max(0.0)).a11y_hidden());
+    let mut inspector = inspector::build(s, cx.layout_size("insp-wave-strip"), k);
+    if let Some((_, h)) = caption {
+        inspector = col().key("inspector-below-caption").w_full().h_full().pt(h).child(inspector);
+    }
     let heading = text(title(s)).key("toolbar-title").font(k.ty.body_medium).color(c.text_base).truncate().shrink();
     let toolbar = Toolbar::new()
         .leading(heading)
-        .trailing(row().gap(8.0).center_y().child(analyse).child(filter).child(search).child(inspector_toggle));
+        .trailing(row().gap(8.0).center_y().child(analyse).child(filter).child(search).child(inspector_toggle).children(clear_caption));
 
     let split = SplitView::new(main)
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar::build(s, k))
-        .inspector(&s.inspector, |s: &mut App| &mut s.inspector, inspector::build(s, cx.layout_size("insp-wave-strip"), k))
+        .inspector(&s.inspector, |s: &mut App| &mut s.inspector, inspector)
         .toolbar(toolbar)
-        .titlebar_inset(cx.titlebar_inset())
-        .frame_inset(8.0)
+        // On Windows the Sleeve menu sits where the traffic lights do on a Mac, so the row clears it.
+        .titlebar_inset(chrome.as_ref().map_or_else(|| cx.titlebar_inset(), |ch| ch.inset))
+        .frame_inset(frame)
         .toolbar_in_panel()
         .sidebar_padding(8.0, 8.0)
         .sidebar_toggle(SidebarToggle::new().size(ControlSize::Large).past_lights(16.0).edge(18.0).gap(4.0).in_header())
@@ -111,7 +125,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(k);
 
-    let mut root = col().w_full().h_full().fill(c.page).child(split);
+    // On Windows, the Sleeve menu goes over the split view's title bar row.
+    let mut root = col().w_full().h_full().fill(c.page).child(split).children(chrome.map(|ch| ch.menu));
     if s.drop_over == Some(DropTarget::Library) {
         root = root.child(drop_veil(s, k));
     }

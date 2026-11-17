@@ -149,6 +149,30 @@ pub fn update_check_failed(s: &mut App) {
     s.update.manual = Some(crate::update::Manual::Failed("couldn't reach GitHub. Check you're online".into()));
 }
 
+/// Sleeve's own title bar, as Windows shows it. A Mac draws no caption buttons in it.
+pub fn windows_titlebar(s: &mut App) {
+    selected(s);
+    s.preview_titlebar = true;
+}
+
+/// The Sleeve menu open in the Windows title bar.
+pub fn windows_menu(s: &mut App) {
+    windows_titlebar(s);
+    s.app_menu = true;
+}
+
+/// The Windows title bar with the sidebar closed.
+pub fn windows_collapsed(s: &mut App) {
+    windows_titlebar(s);
+    s.sidebar.toggle();
+}
+
+/// The Windows chrome with the inspector closed: the caption buttons over the toolbar's end.
+pub fn windows_no_inspector(s: &mut App) {
+    windows_titlebar(s);
+    s.inspector.toggle();
+}
+
 /// An update ready with the sidebar closed: the card floats in the corner instead.
 pub fn update_collapsed(s: &mut App) {
     update_ready(s);

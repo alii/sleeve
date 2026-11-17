@@ -100,6 +100,10 @@ pub struct App {
     pub filter_open: Option<String>,
     /// The Filter button's menu is open.
     pub filter_menu: bool,
+    /// The Sleeve menu in the Windows title bar is open.
+    pub app_menu: bool,
+    /// Draws the Windows title bar on a Mac too, for the `windows-titlebar` snapshot.
+    pub preview_titlebar: bool,
     /// The right-click (or "+") menu that's open, and where.
     pub menu: Option<crate::ui::menus::OpenMenu>,
     pub filter_search: TextEdit,
@@ -195,6 +199,8 @@ impl App {
             base_rows: Vec::new(),
             filter_open: None,
             filter_menu: false,
+            app_menu: false,
+            preview_titlebar: false,
             menu: None,
             filter_search: TextEdit::new(""),
             bpm_from: TextEdit::new(""),
