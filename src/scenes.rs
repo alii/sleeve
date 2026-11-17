@@ -167,6 +167,12 @@ pub fn windows_collapsed(s: &mut App) {
     s.sidebar.toggle();
 }
 
+/// The Windows chrome with the inspector closed: the caption buttons over the toolbar's end.
+pub fn windows_no_inspector(s: &mut App) {
+    windows_titlebar(s);
+    s.inspector.toggle();
+}
+
 /// An update ready with the sidebar closed: the card floats in the corner instead.
 pub fn update_collapsed(s: &mut App) {
     update_ready(s);

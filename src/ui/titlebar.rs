@@ -1,36 +1,54 @@
-//! The title bar on Windows. There Sleeve draws its own in the window's colours, in place of
-//! the white system one. The Sleeve menu sits on the left and holds what the menu bar does on a
-//! Mac. Rune draws Windows' own minimise, maximise and close buttons on the right.
+//! The window's own controls on Windows. There Rune takes away the white system title bar and
+//! draws Windows' minimise, maximise and close buttons over the window's top-right corner, so
+//! the window looks like the Mac one: the split view runs to the top edge.
 //!
-//! On a Mac the menu bar and the traffic lights do this job, so there's no bar.
+//! The Sleeve menu, which holds what the menu bar does on a Mac, sits where the traffic lights
+//! do on a Mac: at the leading end of the sidebar's title bar row, or of the toolbar with the
+//! sidebar closed. The split view clears room for it the way it clears the traffic lights.
+//! What sits in the top-right corner keeps clear of the buttons ([`Chrome::caption`]).
 
-use rune::{Cx, El};
-use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Menu, MenuItem, Placement, WindowTitlebar};
+use rune::{Cx, El, row};
+use rune_kit::shell::TOOLBAR_HEIGHT;
+use rune_kit::{Button, ButtonVariant, ControlSize, Kit, Menu, MenuItem, Placement};
 
 use crate::app::App;
 use crate::ui::icons;
 
-/// The bar's height in points. The caption buttons take it too, as Windows 11's do.
+/// The caption buttons' height in points: Windows 11's.
 pub const HEIGHT: f32 = 32.0;
-/// What the three caption buttons take of the right edge, for the snapshot scene that draws the
-/// bar on a Mac, where Rune draws no buttons.
+/// What the three caption buttons take of the right edge, for the snapshot scenes on a Mac,
+/// where Rune draws no buttons.
 const CAPTION_WIDTH: f32 = rune::Titlebar::CAPTION_BUTTON_WIDTH * 3.0;
+/// The Sleeve button's distance from the window's leading edge.
+const MENU_X: f32 = 10.0;
+/// The Sleeve button's width before it's first laid out.
+const MENU_WIDTH: f32 = 56.0;
 
 const ISSUES: &str = "https://github.com/alii/sleeve/issues";
 
-/// The bar, where the window has one: on Windows, or in the `windows-titlebar` scene.
-pub fn build(s: &App, cx: &mut Cx<App>, k: &Kit, layer: &mut Vec<El>) -> Option<El> {
+/// Sleeve's own window chrome on Windows.
+pub struct Chrome {
+    /// The Sleeve menu's button, placed over the split view's title bar row.
+    pub menu: El,
+    /// What to pass the split view as its titlebar inset, so it clears the menu.
+    pub inset: f32,
+    /// The caption buttons' width and height in the window's top-right corner.
+    pub caption: (f32, f32),
+}
+
+/// The chrome, where the window has it: on Windows, or in the `windows-titlebar` scenes.
+/// `frame` is the split view's frame inset, which pushes its title bar row down.
+pub fn build(s: &App, cx: &mut Cx<App>, k: &Kit, frame: f32, layer: &mut Vec<El>) -> Option<Chrome> {
     let insets = cx.chrome_insets();
     if insets.height <= 0.0 && !s.preview_titlebar {
         return None;
     }
-    let c = &k.c;
-    cx.caption_color(c.text_base);
-    let mut bar = WindowTitlebar::from_insets(insets, 1.0).key("win-titlebar").height(HEIGHT).fill(c.bg_deep).leading_padding(6.0).gap(2.0);
-    if insets.height <= 0.0 {
-        bar = bar.trailing_padding(12.0 + CAPTION_WIDTH);
-    }
-    Some(bar.leading(menu(s, k, layer)).build(k))
+    cx.caption_color(k.c.text_base);
+    let caption = if insets.height > 0.0 { (insets.trailing, insets.height) } else { (CAPTION_WIDTH, HEIGHT) };
+    let width = cx.layout_size("app-menu-button").map_or(MENU_WIDTH, |z| z[0]);
+    // Centred in the title bar row, as the sidebar toggle beside it is.
+    let menu = row().key("app-menu-slot").absolute(MENU_X, frame).h(TOOLBAR_HEIGHT).center_y().child(menu(s, k, layer));
+    Some(Chrome { menu, inset: MENU_X + width, caption })
 }
 
 /// The Sleeve menu: the build, updates, help and Exit.

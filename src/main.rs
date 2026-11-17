@@ -47,14 +47,15 @@ fn main() {
         poll: Some(|s: &mut App, clock, tx| s.poll(clock, tx)),
         on_key: Some(ui::on_key),
         min_size: Some((820.0, 520.0)),
-        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual), ("update-current", scenes::update_current), ("update-collapsed", scenes::update_collapsed), ("update-check-failed", scenes::update_check_failed), ("windows-titlebar", scenes::windows_titlebar), ("windows-menu", scenes::windows_menu), ("windows-collapsed", scenes::windows_collapsed)],
+        scenes: &[("selected", scenes::selected), ("busy", scenes::busy), ("playing", scenes::playing), ("failed", scenes::failed), ("glyphs", scenes::glyphs), ("activity", scenes::activity), ("collapsed", scenes::collapsed), ("log", scenes::log), ("renaming", scenes::renaming), ("confirm", scenes::confirm), ("empty", scenes::empty), ("update-downloading", scenes::update_downloading), ("update-ready", scenes::update_ready), ("update-failed", scenes::update_failed), ("update-manual", scenes::update_manual), ("update-current", scenes::update_current), ("update-collapsed", scenes::update_collapsed), ("update-check-failed", scenes::update_check_failed), ("windows-titlebar", scenes::windows_titlebar), ("windows-menu", scenes::windows_menu), ("windows-collapsed", scenes::windows_collapsed), ("windows-no-inspector", scenes::windows_no_inspector)],
         ..AppSpec::new("Sleeve", (1280.0, 800.0), App::new, ui::view)
     };
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((26.0, 25.0)), drag_regions: true };
     // In the Sleeve menu on a Mac. On Windows it's in the menu in Sleeve's own title bar.
     let check = rune::MenuItem::new("Check for Updates…", |s: &mut App, _| s.update.check_now()).id("check-updates");
     let app = rune::App::new(spec).chrome(chrome).menu_item(check);
-    // Windows: Sleeve draws its own title bar (ui::titlebar) in place of the system's.
+    // Windows: no system title bar. Rune draws the caption buttons over the top-right corner, and
+    // ui::titlebar places the Sleeve menu where the traffic lights are on a Mac.
     #[cfg(windows)]
     let app = app.titlebar(rune::Titlebar::new(ui::titlebar::HEIGHT));
     app.run();
