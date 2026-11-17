@@ -55,6 +55,9 @@ pub struct App {
     pub deck_wave: Option<crate::deck::DeckWave>,
     /// The deck track's grid and zoomed waveform, coming from a worker.
     pub(crate) deck_grid_rx: Option<Receiver<crate::deck::DeckGrid>>,
+    /// The tempo changes in an edited grid, being looked for on a worker: the beats searched, and
+    /// what was found in them.
+    pub(crate) ramps_rx: Option<Receiver<(Vec<rbl_anlz::Beat>, Vec<crate::tempo_ramp::Found>)>>,
     /// The rows whose files are only in iCloud, found by a worker after each load so the list
     /// never asks the disk while drawing. Empty until the first scan lands.
     pub evicted: HashSet<Row>,
@@ -65,6 +68,9 @@ pub struct App {
     pub(crate) grid_edit: Option<crate::grid_edit::GridEdit>,
     /// The BPM box shown while editing the grid.
     pub grid_bpm: TextEdit,
+    /// The boxes shown while shaping a tempo change: the tempo it changes to, and its bars.
+    pub ramp_to: TextEdit,
+    pub ramp_bars: TextEdit,
     /// Seconds of track the zoomed waveform shows across its width.
     pub zoom_secs: f64,
     /// A scroll or pinch on the deck that hasn't yet added up to a whole zoom step.
@@ -179,10 +185,13 @@ impl App {
             quantize: true,
             grid_edit: None,
             grid_bpm: TextEdit::new(""),
+            ramp_to: TextEdit::new(""),
+            ramp_bars: TextEdit::new(""),
             zoom_secs: crate::deck::DEFAULT_ZOOM_SECS,
             zoom_gesture: 0.0,
             glides: std::cell::RefCell::new(None),
             deck_grid_rx: None,
+            ramps_rx: None,
             evicted: HashSet::new(),
             evicted_rx: None,
             imports: Vec::new(),
@@ -354,6 +363,7 @@ impl App {
         }
         changed |= self.player.tick();
         changed |= self.land_deck_grid();
+        changed |= self.land_ramps();
         if let Some(rx) = &self.evicted_rx
             && let Ok((generation, rows)) = rx.try_recv()
         {

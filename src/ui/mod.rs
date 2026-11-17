@@ -5,6 +5,7 @@ pub mod filters;
 pub mod icons;
 pub mod inspector;
 pub mod menus;
+pub mod ramp;
 pub mod sidebar;
 pub mod statusbar;
 pub mod titlebar;
@@ -281,6 +282,11 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         } else {
             s.play_focused(None, tx);
         }
+        return true;
+    }
+    // Escape drops a tempo change whose new tempo was never typed, so nothing changed.
+    if ev.key == rune::Key::Escape && s.ramp_unplaced() {
+        s.finish_ramp();
         return true;
     }
     // While fixing the grid, undo takes back the last drag.

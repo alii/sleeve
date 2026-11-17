@@ -10,7 +10,7 @@ use crate::library;
 use crate::ui::icons;
 
 const WAVE_H: f32 = 64.0;
-const PAD: (f32, f32) = (26.0, 22.0);
+pub(crate) const PAD: (f32, f32) = (26.0, 22.0);
 
 /// The key held to stretch the grid instead of sliding it.
 const STRETCH_KEY: &str = if cfg!(target_os = "macos") { "⌥" } else { "Alt" };
@@ -324,6 +324,10 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
 /// The buttons shown in place of the cue pads while editing the grid.
 fn grid_tools(s: &App, k: &Kit) -> El {
     use crate::grid_edit::GridTool;
+    // A tempo change being shaped has its settings here instead.
+    if let Some(edit) = s.ramp_edit() {
+        return crate::ui::ramp::tools(s, edit, k);
+    }
     let c = &k.c;
     let tool = |key: &'static str, label: &'static str, help: &'static str, t: GridTool| {
         let b = row()
@@ -341,6 +345,33 @@ fn grid_tools(s: &App, k: &Kit) -> El {
             .child(text(label).font(k.ty.small_medium).color(c.text_base));
         k.interactive(b).on_press(move |s: &mut App| s.grid_tool(t))
     };
+    // A grid whose tempo changes has no one tempo to type, so the box only shows the tempo at
+    // the playhead, live, and tempo changes are made with TEMPO.
+    if let Some(g) = s.grid_edit.as_ref().filter(|g| rbl_anlz::grid::is_dynamic_from(&g.beats, None)) {
+        let now = s.player.now() * s.deck_duration_ms().unwrap_or(0.0);
+        let bpm = crate::deck::grid_pos(&g.beats, now).map_or_else(String::new, |p| format!("{:.2}", p.bpm));
+        let shown = row()
+            .key("deck-grid-bpm")
+            .h(PAD.1)
+            .w(54.0)
+            .px(8.0)
+            .radius(5.0)
+            .center_y()
+            .fill(c.layer_01)
+            .help("This grid changes tempo, so it has no one tempo to type. This is the tempo at the playhead; use TEMPO to change a tempo change")
+            .child(text(bpm).font(k.ty.small_medium.features("'tnum' 1")).color(c.text_faint));
+        return row()
+            .key("deck-grid-tools")
+            .gap(4.0)
+            .center_y()
+            .child(shown)
+            .child(text("BPM").font(k.ty.small).color(c.text_faint))
+            .child(el().w(4.0))
+            .child(tool("deck-grid-snap", "SNAP", "Snap the nearest beat to the playhead, and pin it", GridTool::SnapToPlayhead))
+            .child(tool("deck-grid-halve", "÷2", "Halve the grid: half the beats, half the BPM", GridTool::Halve))
+            .child(tool("deck-grid-double", "×2", "Double the grid: twice the beats, twice the BPM", GridTool::Double))
+            .child(crate::ui::ramp::tempo_button(k));
+    }
     // The tempo, typed in: Return spaces the beats for it around the pinned beat.
     let bpm = rune_kit::TextInput::new(&s.grid_bpm)
         .label("Grid tempo in BPM")
@@ -364,6 +395,7 @@ fn grid_tools(s: &App, k: &Kit) -> El {
         .child(tool("deck-grid-snap", "SNAP", "Snap the nearest beat to the playhead, and pin it", GridTool::SnapToPlayhead))
         .child(tool("deck-grid-halve", "÷2", "Halve the grid: half the beats, half the BPM", GridTool::Halve))
         .child(tool("deck-grid-double", "×2", "Double the grid: twice the beats, twice the BPM", GridTool::Double))
+        .child(crate::ui::ramp::tempo_button(k))
 }
 
 const VOLUME_W: f32 = 72.0;
@@ -439,6 +471,9 @@ fn wave(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue], 
         let id = s.player.track.clone().unwrap_or_default();
         let ends = (beats.first().map(|b| b.time_ms), beats.last().map(|b| b.time_ms));
         strip = strip.child(rune::memo("deck-grid", (id, beats.len(), ends, total_ms.to_bits()), || grid(beats, total_ms).w_full().h_full().absolute(0.0, 0.0).inert()));
+    }
+    if total_ms > 0.0 {
+        strip = strip.children(crate::ui::ramp::overview_tints(s, total_ms, view_w, WAVE_H));
     }
     strip = strip.child(el().key("deck-played").absolute(0.0, 0.0).h_full().w(0.0).fill(screen().alpha(0.55)).live_rect(&played).inert());
     // Hot cue markers: a hairline and a lettered flag in the cue's colour.
@@ -518,7 +553,9 @@ const ZOOM_H: f32 = 96.0;
 /// be put exactly on a beat. Dragging moves the track; with quantise on, it lands on a beat.
 fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue], total_ms: f64, view_w: f32, k: &Kit) -> El {
     let c = &k.c;
-    let mut strip = el().key("deck-zoom").instant_changes().w_full().h(ZOOM_H).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Grab);
+    // The system's hand over it, as it can be dragged. Not its grab cursor, which Windows doesn't
+    // have and shows as the four arrows of a move.
+    let mut strip = el().key("deck-zoom").instant_changes().w_full().h(ZOOM_H).radius(k.radius.md).fill(screen()).clip_rounded(k.radius.md).cursor(rune::Cursor::Pointer);
     let pps = view_w / s.zoom_secs as f32;
     // Everything that moves sits on one layer, laid out around the anchor and slid left by the
     // renderer as the track plays. It covers the view plus the whole glide.
@@ -570,6 +607,10 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             world = world.child(el().key(key).absolute(x - 0.5, 0.0).size(1.0, ZOOM_H).fill(screen_ink().alpha(0.2)));
         }
     }
+    // Tempo changes, and one being shaped, over the grid and under the cues.
+    if let Some(band) = crate::ui::ramp::bands(s, &x_of, reach.max(view_w), ZOOM_H, k) {
+        world = world.child(band);
+    }
     // Hot cues: a full-height line and a lettered flag.
     for (slot, cue) in cues.iter().enumerate() {
         let Some(cue) = cue else { continue };
@@ -595,11 +636,18 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
     }
     // The pinned beat, which stretching holds still: a dot at the foot of its line.
     let edit = s.grid_edit.as_ref().filter(|_| s.grid_editing());
-    if let Some(pin) = edit.and_then(|g| g.pivot_ms) {
+    // Not while shaping a tempo change, whose own pins look the same and would be confused with it.
+    if let Some(pin) = edit.and_then(|g| g.pivot_ms).filter(|_| s.ramp_edit().is_none()) {
         let x = x_of(pin as f32 / 1000.0);
         world = world.child(el().key("deck-zoom-pin").absolute(x - 4.0, ZOOM_H - 10.0).size(8.0, 8.0).radius(4.0).fill(c.icon_accent));
     }
     strip = strip.child(world);
+    // The handle that shapes a tempo change sits on the strip, not the inert moving layer, so it
+    // can be grabbed.
+    if let Some(handle) = crate::ui::ramp::handle(s, &x_of, ZOOM_H) {
+        strip = strip.child(handle);
+    }
+    strip = strip.children(crate::ui::ramp::pin_buttons(s, &x_of, k));
     if let Some(g) = edit {
         let mut bar = row()
             .key("deck-zoom-grid-bar")
@@ -612,8 +660,13 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .radius(6.0)
             .center_y()
             .fill(screen())
-            .child(text(format!("Drag to slide · {STRETCH_KEY}-drag to stretch")).font(k.ty.small).color(screen_ink().alpha(0.7)));
-        if g.changed() {
+            .child(
+                text(crate::ui::ramp::hint(s).map_or_else(|| format!("Drag to slide · {STRETCH_KEY}-drag to stretch"), str::to_owned))
+                    .font(k.ty.small)
+                    .color(screen_ink().alpha(0.7)),
+            );
+        // Shaping a tempo change, its own Remove takes Revert's place.
+        if g.changed() && s.ramp_edit().is_none() {
             bar = bar.child(
                 row()
                     .key("deck-zoom-revert")
@@ -666,14 +719,17 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .child(zoom_btn("−", 1, "deck-zoom-out", "Zoom out · - (Shift = resets)"))
             .child(zoom_btn("+", -1, "deck-zoom-in", "Zoom in · = (Shift = resets)")),
     );
-    strip.on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
+    // Shaping a tempo change, a double-click on a pinned beat unpins it. Otherwise it does nothing.
+    strip.on_double_press(|s: &mut App| s.unpin()).on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| {
         let Some(total) = s.deck_duration_ms().filter(|t| *t > 0.0) else { return };
         let pps = d.w / s.zoom_secs as f32;
         // With Grid on, the drag moves the grid, not the track. The time under the pointer is
         // worked out afresh each step, so it holds while the track plays.
         if s.grid_editing() {
             let at_ms = s.player.now() * total + f64::from((d.x - d.w / 2.0) / pps.max(1.0)) * 1000.0;
-            s.grid_drag(d.phase, at_ms, tx.mods().alt, d.cancelled());
+            // A tempo change's end can be taken hold of from this many points either side.
+            let reach_ms = f64::from(8.0 / pps.max(1.0)) * 1000.0;
+            s.grid_drag(d.phase, at_ms, reach_ms, tx.mods().alt, d.cancelled());
             return;
         }
         match d.phase {

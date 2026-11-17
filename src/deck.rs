@@ -29,6 +29,10 @@ pub struct DeckWave {
     pub art: Option<rune::Image>,
     /// The track's beat grid from its analysis file, in time order. Empty if it has none.
     pub beats: Vec<rbl_anlz::Beat>,
+    /// The tempo changes in `beats`, found again whenever they change, as nothing records them.
+    pub ramps: Vec<crate::tempo_ramp::Found>,
+    /// Whether `ramps` are behind `beats`, which changed mid-drag.
+    pub ramps_stale: bool,
     /// The zoomed waveform, if the track has a detailed one.
     pub detail: Option<crate::waveform::Detail>,
 }
@@ -38,6 +42,7 @@ pub struct DeckGrid {
     id: String,
     generation: u64,
     beats: Vec<rbl_anlz::Beat>,
+    ramps: Vec<crate::tempo_ramp::Found>,
     detail: Option<crate::waveform::Detail>,
 }
 
@@ -160,7 +165,64 @@ pub fn retempo(beats: &[rbl_anlz::Beat], pivot: usize, bpm: f64, track_ms: f64) 
     fit_grid(beats, (pivot, t), Some((other, t + (other as f64 - pivot as f64) * gap)), track_ms)
 }
 
-fn read_beats(share: &std::path::Path, rel: &str) -> Vec<rbl_anlz::Beat> {
+/// A grid whose tempo changes, moved and scaled as a whole, keeping its shape: each beat goes
+/// from `t` to `pivot_ms + (t - pivot_ms) * scale + shift_ms`, and each tempo is divided by
+/// `scale`. A slide is a shift with a scale of 1. A stretch is a scale about the pinned beat, so a
+/// ramp from 120 to 140 BPM stretched 1% slower becomes one from 118.81 to 138.61.
+///
+/// [`fit_grid`] would refit such a grid at one steady tempo and lose its tempo changes. This keeps
+/// them. As there, the grid then runs from the start of the track up to `track_ms`: beats moved
+/// outside it go, and the gaps left at either end are filled at the spacing and tempo of the beat
+/// at that end, with bars carrying on.
+///
+/// None if `scale` isn't a positive number, if fewer than two beats would be left, or if a tempo
+/// would leave the 40 to 499 BPM rekordbox allows.
+pub fn reshape_grid(beats: &[rbl_anlz::Beat], pivot_ms: f64, scale: f64, shift_ms: f64, track_ms: f64) -> Option<Vec<rbl_anlz::Beat>> {
+    use rbl_anlz::grid::{MAX_BPM_X100, MIN_BPM_X100};
+    if !(scale > 0.0 && scale.is_finite() && pivot_ms.is_finite() && shift_ms.is_finite() && track_ms.is_finite()) {
+        return None;
+    }
+    // Exact times while the ends are worked out, rounded to whole ms only at the end, each on its
+    // own, so the rounding never adds up.
+    let mut moved: Vec<(f64, rbl_anlz::Beat)> = Vec::with_capacity(beats.len());
+    for b in beats {
+        let tempo = (f64::from(b.tempo_x100) / scale).round();
+        if !(f64::from(MIN_BPM_X100)..=f64::from(MAX_BPM_X100)).contains(&tempo) {
+            return None;
+        }
+        let t = pivot_ms + (f64::from(b.time_ms) - pivot_ms) * scale + shift_ms;
+        if (0.0..track_ms).contains(&t) {
+            moved.push((t, rbl_anlz::Beat { tempo_x100: tempo as u16, ..*b }));
+        }
+    }
+    if moved.len() < 2 {
+        return None;
+    }
+    let step = |n: u16, by: i32| ((i32::from(n) - 1 + by).rem_euclid(4) + 1) as u16;
+    // Fill the start at the first gap, then the end at the last.
+    let first_gap = moved[1].0 - moved[0].0;
+    let mut before = Vec::new();
+    let (mut t, mut beat) = moved[0];
+    while first_gap > 0.0 && t - first_gap >= 0.0 {
+        t -= first_gap;
+        beat.beat_number = step(beat.beat_number, -1);
+        before.push((t, beat));
+    }
+    before.reverse();
+    before.append(&mut moved);
+    let mut out = before;
+    let n = out.len();
+    let last_gap = out[n - 1].0 - out[n - 2].0;
+    let (mut t, mut beat) = out[n - 1];
+    while last_gap > 0.0 && t + last_gap < track_ms {
+        t += last_gap;
+        beat.beat_number = step(beat.beat_number, 1);
+        out.push((t, beat));
+    }
+    Some(out.into_iter().map(|(t, b)| rbl_anlz::Beat { time_ms: t.round() as u32, ..b }).collect())
+}
+
+pub(crate) fn read_beats(share: &std::path::Path, rel: &str) -> Vec<rbl_anlz::Beat> {
     if rel.is_empty() {
         return Vec::new();
     }
@@ -295,7 +357,7 @@ impl App {
             Some(art) => Some(art),
             None => self.artwork_for(row, 88.0),
         };
-        let (beats, detail) = prev.map_or_else(|| (Vec::new(), None), |w| (w.beats, w.detail));
+        let (beats, ramps, detail) = prev.map_or_else(|| (Vec::new(), Vec::new(), None), |w| (w.beats, w.ramps, w.detail));
         let Some(l) = self.loaded() else { return };
         // The grid and the zoomed waveform are read on a worker, never here: the disk may be
         // slow, and the window must keep drawing. They land in `poll`.
@@ -303,25 +365,87 @@ impl App {
         let (share, generation, wanted, waker) = (l.location.share_root.clone(), l.generation, id.clone(), self.waker.clone());
         std::thread::spawn(move || {
             let beats = read_beats(&share, &rel);
+            let ramps = crate::tempo_ramp::find(&beats);
             let detail = crate::waveform::load_detail(&share, &rel);
-            if tx.send(DeckGrid { id: wanted, generation, beats, detail }).is_ok()
+            if tx.send(DeckGrid { id: wanted, generation, beats, ramps, detail }).is_ok()
                 && let Some(w) = waker
             {
                 w();
             }
         });
         self.deck_grid_rx = Some(rx);
-        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats, detail });
+        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats, ramps, ramps_stale: false, detail });
+    }
+
+    /// Looks for the tempo changes in the deck's grid on a worker, so the window keeps drawing:
+    /// each one found takes a moment, and a grid's looked through again after every edit. What's
+    /// found lands in `poll`, if the grid is still the one searched. A search started while
+    /// another runs replaces it.
+    pub(crate) fn find_ramps_later(&mut self) {
+        let Some(w) = self.deck_wave.as_mut() else { return };
+        w.ramps_stale = false;
+        let beats = w.beats.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waker = self.waker.clone();
+        std::thread::spawn(move || {
+            let found = crate::tempo_ramp::find(&beats);
+            if tx.send((beats, found)).is_ok()
+                && let Some(w) = waker
+            {
+                w();
+            }
+        });
+        self.ramps_rx = Some(rx);
+    }
+
+    /// The tempo changes in the deck's grid, looked for here and now if they're behind it: for a
+    /// press that needs them straight away, not for every edit.
+    pub(crate) fn find_ramps_now(&mut self) {
+        let pending = self.ramps_rx.take().is_some();
+        if let Some(w) = self.deck_wave.as_mut()
+            && (pending || w.ramps_stale)
+        {
+            w.ramps = crate::tempo_ramp::find(&w.beats);
+            w.ramps_stale = false;
+        }
+    }
+
+    /// Takes what a search for tempo changes found, once it has. Returns true when it changed
+    /// what's shown.
+    pub(crate) fn land_ramps(&mut self) -> bool {
+        let Some((beats, found)) = self.ramps_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return false };
+        self.ramps_rx = None;
+        match self.deck_wave.as_mut() {
+            // A grid that's moved on since is being searched again, or will be.
+            Some(w) if w.beats == beats => {
+                w.ramps = found;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Takes the grid and zoomed waveform once the worker has read them. Returns true when
     /// they changed what's shown.
     pub(crate) fn land_deck_grid(&mut self) -> bool {
         let Some(grid) = self.deck_grid_rx.as_ref().and_then(|rx| rx.try_recv().ok()) else { return false };
+        self.take_deck_grid(grid)
+    }
+
+    /// Waits for the worker's grid and zoomed waveform and takes them, for a scene that needs
+    /// them in place before its snapshot.
+    pub(crate) fn wait_for_deck_grid(&mut self) {
+        if let Some(grid) = self.deck_grid_rx.as_ref().and_then(|rx| rx.recv().ok()) {
+            self.take_deck_grid(grid);
+        }
+    }
+
+    fn take_deck_grid(&mut self, grid: DeckGrid) -> bool {
         self.deck_grid_rx = None;
         let landed = match self.deck_wave.as_mut() {
             Some(w) if w.id == grid.id && w.generation == grid.generation => {
                 w.beats = grid.beats;
+                w.ramps = grid.ramps;
                 w.detail = grid.detail;
                 true
             }
@@ -545,7 +669,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_grid, grid_pos, nearest_beat, nudge_target, retempo};
+    use super::{fit_grid, grid_pos, nearest_beat, nudge_target, reshape_grid, retempo};
     use rbl_anlz::Beat;
 
     fn grid() -> Vec<Beat> {
@@ -645,6 +769,62 @@ mod tests {
         assert!(retempo(&grid(), 11, 125.0, 6000.0).unwrap().iter().any(|b| b.time_ms == 5500));
         assert_eq!(retempo(&grid(), 5, 39.0, 6000.0), None, "slower than rekordbox allows");
         assert_eq!(retempo(&grid()[..1], 0, 125.0, 6000.0), None, "one beat has no spacing");
+    }
+
+    /// Four beats at 120 BPM, then a ramp up to 140 over four more, then 140: a grid whose tempo
+    /// changes, as the ramp editor writes one.
+    fn ramped() -> Vec<Beat> {
+        let times = [0, 500, 1000, 1500, 1980, 2450, 2900, 3329, 3757, 4186];
+        times
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| {
+                let gap = times.get(i + 1).map_or(429, |n| n - t);
+                Beat { beat_number: (i % 4 + 1) as u16, tempo_x100: (6_000_000.0 / f64::from(gap)).round() as u16, time_ms: t }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sliding_a_changing_grid_moves_every_beat_alike() {
+        let g = ramped();
+        let out = reshape_grid(&g, 0.0, 1.0, 100.0, 4800.0).unwrap();
+        // Every beat 100 ms later with its tempo kept, so the ramp keeps its shape...
+        for (a, b) in g.iter().zip(&out) {
+            assert_eq!((b.time_ms, b.tempo_x100, b.beat_number), (a.time_ms + 100, a.tempo_x100, a.beat_number));
+        }
+        // ...and the end filled at the last spacing: 4286 + 429 = 4715 fits before 4800.
+        assert_eq!(out.len(), g.len() + 1);
+        assert_eq!((out[10].time_ms, out[10].beat_number, out[10].tempo_x100), (4715, 3, 13986));
+        // Sliding back pushes the first beat before the start, so it goes.
+        let back = reshape_grid(&g, 0.0, 1.0, -100.0, 4800.0).unwrap();
+        assert_eq!((back[0].time_ms, back[0].beat_number), (400, 2));
+    }
+
+    #[test]
+    fn stretching_a_changing_grid_scales_it_about_the_pinned_beat() {
+        let g = ramped();
+        // 1% faster about beat 4 (1980 ms): it stays, the others come 1% closer to it. (Slower
+        // would push the first beat before the start of the track, and it would go.)
+        let out = reshape_grid(&g, 1980.0, 0.99, 0.0, 6000.0).unwrap();
+        assert_eq!(out[4].time_ms, 1980, "the pinned beat holds still");
+        for (k, a) in g.iter().enumerate() {
+            let want = 1980.0 + (f64::from(a.time_ms) - 1980.0) * 0.99;
+            assert!((f64::from(out[k].time_ms) - want).abs() <= 0.5, "beat {k}");
+            assert_eq!(out[k].tempo_x100, (f64::from(a.tempo_x100) / 0.99).round() as u16);
+        }
+        // Still a ramp: the tempo still rises through it, by over 10 BPM from beat 4 to beat 8.
+        assert!(out[8].tempo_x100 > out[4].tempo_x100 + 1000);
+    }
+
+    #[test]
+    fn reshaping_that_makes_no_sense_is_refused() {
+        let g = ramped();
+        assert_eq!(reshape_grid(&g, 0.0, 0.0, 0.0, 6000.0), None, "no scale");
+        assert_eq!(reshape_grid(&g, 0.0, -1.0, 0.0, 6000.0), None, "turned back to front");
+        assert_eq!(reshape_grid(&g, 0.0, f64::NAN, 0.0, 6000.0), None, "not a number");
+        assert_eq!(reshape_grid(&g, 0.0, 0.25, 0.0, 6000.0), None, "560 BPM");
+        assert_eq!(reshape_grid(&g, 0.0, 1.0, 9000.0, 6000.0), None, "slid off the end");
     }
 
     #[test]
