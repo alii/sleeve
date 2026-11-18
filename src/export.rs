@@ -616,6 +616,43 @@ fn source_audio(folder_path: &str, alternates: &[String]) -> PathBuf {
     alternates.iter().map(PathBuf::from).find(|p| p.is_file()).unwrap_or(first)
 }
 
+/// Writes the whole collection to `to` as rekordbox XML (what rekordbox's own `File › Import`
+/// reads), each track's grid included as `TEMPO` entries, so tempo changes made here go over as
+/// rekordbox writes its own. The grids are read from each track's analysis file, one by one;
+/// a track that hasn't been analysed goes without. Nothing is written until the whole document
+/// is made, so a stopped export leaves no half file.
+#[cfg_attr(not(test), expect(dead_code, reason = "ready for an XML export button; nothing starts it yet"))]
+pub fn run_xml(store: &Store, index: &Index, to: &Path, rep: &mut Reporter) -> Outcome {
+    let total = index.len() as u64;
+    let share = store.location.share_root.clone();
+    let mut done = 0_u64;
+    let mut with_grids = 0_u64;
+    let xml = rbl_index::export_xml_with_grids(index, |row| {
+        done += 1;
+        if done.is_multiple_of(200) || done == total {
+            rep.progress(done, Some(total), index.title.get(row as usize).to_owned());
+        }
+        if rep.is_cancelled() {
+            return None;
+        }
+        let path = index.analysis_path.get(row as usize);
+        if path.is_empty() {
+            return None;
+        }
+        let beats = rbl_anlz::Anlz::read(&rbl_anlz::resolve(&share, path)).ok()?.beat_grid().filter(|b| !b.is_empty())?;
+        with_grids += 1;
+        Some(beats)
+    });
+    let name = to.file_name().map_or_else(|| to.display().to_string(), |n| n.to_string_lossy().into_owned());
+    if rep.is_cancelled() {
+        return Outcome::Stopped(format!("Stopped. {name} wasn't written."));
+    }
+    match rbl_core::durable::write(to, xml.as_bytes()) {
+        Ok(()) => Outcome::Completed(format!("Wrote {} to {name}, {with_grids} with grids", if total == 1 { "1 track".to_owned() } else { format!("{total} tracks") })),
+        Err(e) => Outcome::Failed(format!("Couldn't write {name}: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,6 +716,63 @@ mod tests {
             assert!(start.elapsed() < Duration::from_secs(60), "the export timed out");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn the_xml_export_carries_a_tempo_change_as_rekordbox_writes_one() {
+        let library = TempDir::new("library-xml");
+        let out = TempDir::new("out-xml");
+        let shape = fixture::Shape { tracks: 2, playlists: 1, tracks_per_playlist: 2, ..Default::default() };
+        let location = fixture::build(&library.0, shape).unwrap();
+        // The first track's grid: 128 for 4 bars, 4 beats speeding up to 140, then 140.
+        let mut lengths = vec![468.75; 16];
+        lengths.extend([460.0, 450.0, 440.0, 435.0]);
+        lengths.extend([60_000.0 / 140.0; 16]);
+        let mut at = 100.0_f64;
+        let beats: Vec<rbl_anlz::Beat> = lengths
+            .iter()
+            .enumerate()
+            .map(|(i, len)| {
+                let b = rbl_anlz::Beat { beat_number: (i % 4 + 1) as u16, tempo_x100: (6_000_000.0_f64 / len).round() as u16, time_ms: at.round() as u32 };
+                at += len;
+                b
+            })
+            .collect();
+        let mut builder = rbl_anlz::AnlzBuilder::new();
+        builder.path("/m/x.mp3").beat_grid(&beats);
+        let relative = "/PIONEER/USBANLZ/P001/00000001/ANLZ0000.DAT";
+        let dat = location.share_root.join(relative.trim_start_matches('/'));
+        std::fs::create_dir_all(dat.parent().unwrap()).unwrap();
+        std::fs::write(&dat, builder.finish()).unwrap();
+        fixture::set_analysis_path(&location, 0, relative).unwrap();
+        let db = rbl_db::Library::open(location.clone(), OpenMode::ReadOnly).unwrap();
+        let index = Arc::new(rbl_index::load(&db).unwrap().0);
+        drop(db);
+        let store = Arc::new(Store::new(location));
+
+        let to = out.0.join("collection.xml");
+        let mut jobs = Jobs::default();
+        let (s, i, t) = (store.clone(), index.clone(), to.clone());
+        let id = jobs.spawn(JobKind::Export, "Exporting", move |rep| run_xml(&s, &i, &t, rep));
+        let start = Instant::now();
+        let outcome = loop {
+            let _ = jobs.drain(0.0);
+            if let Phase::Done { outcome, .. } = &jobs.get(id).unwrap().phase {
+                break outcome.clone();
+            }
+            assert!(start.elapsed() < Duration::from_secs(60), "the export timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(outcome, Outcome::Completed("Wrote 2 tracks to collection.xml, 1 with grids".into()));
+
+        let xml = std::fs::read_to_string(&to).unwrap();
+        let tempos: Vec<&str> = xml.lines().filter(|l| l.contains("<TEMPO ")).collect();
+        // One for the steady 128, one per beat of the change, and one for the steady 140.
+        assert_eq!(tempos.len(), 6, "{tempos:#?}");
+        assert!(tempos[0].contains("Inizio=\"0.100\" Bpm=\"128.00\" Metro=\"4/4\" Battito=\"1\""), "{}", tempos[0]);
+        assert!(tempos[5].contains("Bpm=\"140.00\""), "{}", tempos[5]);
+        // Only the analysed track has a grid.
+        assert_eq!(xml.matches("<TRACK TrackID").count(), 2);
     }
 
     #[test]

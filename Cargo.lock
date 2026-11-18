@@ -3253,6 +3253,7 @@ dependencies = [
  "icu_locale_core",
  "memchr",
  "parking_lot",
+ "rbl-anlz",
  "rbl-core",
  "rbl-db",
  "rbl-devices",

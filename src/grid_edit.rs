@@ -13,7 +13,7 @@ use rbl_anlz::Beat;
 use rune::Phase;
 
 use crate::app::App;
-use crate::deck::fit_grid;
+use crate::deck::{fit_grid, reshape_grid};
 use crate::jobs::{JobKind, Outcome};
 
 /// A grid being edited.
@@ -24,12 +24,18 @@ pub struct GridEdit {
     saved: Vec<Beat>,
     /// The grid as it's been edited so far.
     pub beats: Vec<Beat>,
-    /// The grid before each change, latest last.
-    undo: Vec<Vec<Beat>>,
+    /// The grid before each change, latest last, with the tempo change that was being shaped
+    /// then, if one was, so undoing a change to a ramp steps back through it rather than out.
+    undo: Vec<(Vec<Beat>, Option<crate::ramp_edit::RampEdit>)>,
+    /// The tempo change as it stood when the grid was last settled (after a change, outside a
+    /// drag): what the next step of undo records beside the grid it replaces.
+    settled_ramp: Option<crate::ramp_edit::RampEdit>,
     /// The pinned beat, in ms: where the last slide put the beat it carried. Stretching holds
     /// it still. Before any slide, stretching holds the beat nearest the playhead.
     pub pivot_ms: Option<f64>,
     grab: Option<Grab>,
+    /// A tempo change being placed or shaped, which takes over the grid tools while it lasts.
+    pub ramp: Option<crate::ramp_edit::RampEdit>,
 }
 
 /// The grid buttons shown while editing.
@@ -61,10 +67,35 @@ impl GridEdit {
     pub fn changed(&self) -> bool {
         self.beats != self.saved
     }
+
+    /// Puts in a new grid as one step of undo. The same grid again changes nothing.
+    /// Whether the grid, or a tempo change in it, is being dragged.
+    pub fn holding(&self) -> bool {
+        self.grab.is_some() || self.ramp.as_ref().is_some_and(crate::ramp_edit::RampEdit::dragging)
+    }
+
+    pub(crate) fn replace(&mut self, beats: Vec<Beat>) {
+        if beats != self.beats {
+            let before = std::mem::replace(&mut self.beats, beats);
+            self.push_undo(before);
+        }
+    }
+
+    /// Records `before`, the grid ahead of a change, as one step of undo, with the ramp as it
+    /// stood then.
+    fn push_undo(&mut self, before: Vec<Beat>) {
+        self.undo.push((before, self.settled_ramp.clone()));
+    }
+
+    /// Records `before` as the grid ahead of a change already made live (by a drag), so undo
+    /// takes the whole change back in one step.
+    pub(crate) fn undo_from(&mut self, before: Vec<Beat>) {
+        self.push_undo(before);
+    }
 }
 
 /// The beat nearest `ms`, as an index.
-fn nearest(beats: &[Beat], ms: f64) -> Option<usize> {
+pub(crate) fn nearest(beats: &[Beat], ms: f64) -> Option<usize> {
     rbl_anlz::grid::nearest_index(beats, ms.round().max(0.0) as u32)
 }
 
@@ -85,7 +116,7 @@ impl App {
         if beats.is_empty() {
             return;
         }
-        self.grid_edit = Some(GridEdit { id, saved: beats.clone(), beats, undo: Vec::new(), pivot_ms: None, grab: None });
+        self.grid_edit = Some(GridEdit { id, saved: beats.clone(), beats, undo: Vec::new(), settled_ramp: None, pivot_ms: None, grab: None, ramp: None });
         self.show_grid_edit();
     }
 
@@ -99,10 +130,21 @@ impl App {
         let typed = self.grid_bpm.text.trim().replace(',', ".").parse::<f64>().ok();
         let Some(g) = self.grid_edit.as_mut() else { return };
         let pivot = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead));
-        match typed.zip(pivot).and_then(|(bpm, p)| crate::deck::retempo(&g.beats, p, bpm, total)) {
+        // With tempo changes, the whole grid scales so the pinned beat gets the typed tempo and
+        // the rest keep their shape around it.
+        let retempo = |bpm: f64, p: usize| {
+            if rbl_anlz::grid::is_dynamic_from(&g.beats, None) {
+                let held = g.beats[p];
+                reshape_grid(&g.beats, f64::from(held.time_ms), f64::from(held.tempo_x100) / (bpm * 100.0), 0.0, total)
+            } else {
+                crate::deck::retempo(&g.beats, p, bpm, total)
+            }
+        };
+        match typed.zip(pivot).and_then(|(bpm, p)| retempo(bpm, p)) {
             Some(beats) => {
                 if beats != g.beats {
-                    g.undo.push(std::mem::replace(&mut g.beats, beats));
+                    let before = std::mem::replace(&mut g.beats, beats);
+                    g.push_undo(before);
                 }
             }
             None => {
@@ -154,7 +196,22 @@ impl App {
     /// One step of a drag on the zoomed waveform with Grid on. `at_ms` is the time under the
     /// pointer. `stretch`, read at the press, holds the pinned beat still and changes the tempo
     /// instead of sliding everything.
-    pub fn grid_drag(&mut self, phase: Phase, at_ms: f64, stretch: bool, cancelled: bool) {
+    pub fn grid_drag(&mut self, phase: Phase, at_ms: f64, reach_ms: f64, stretch: bool, cancelled: bool) {
+        // Shaping a tempo change, a drag moves one of its ends or warps a beat instead of sliding
+        // the grid, which would move the grid out from under the ramp.
+        if self.ramp_edit().is_some() {
+            match phase {
+                Phase::Down => self.ramp_press(at_ms, reach_ms),
+                Phase::Move => self.ramp_drag(at_ms),
+                Phase::Up => {
+                    if !cancelled {
+                        self.ramp_drag(at_ms);
+                    }
+                    self.ramp_release(cancelled);
+                }
+            }
+            return;
+        }
         let Some(total) = self.deck_duration_ms().filter(|t| *t > 0.0) else { return };
         let playhead = self.player.now() * total;
         let Some(g) = self.grid_edit.as_mut() else { return };
@@ -171,10 +228,18 @@ impl App {
             g.grab = None;
         } else {
             // The grabbed beat moves as far as the pointer has, so it doesn't jump to it.
-            let target = f64::from(grab.from[grab.index].time_ms) + at_ms - grab.start_ms;
-            let fitted = match grab.pivot {
-                Some(p) => fit_grid(&grab.from, (p, f64::from(grab.from[p].time_ms)), Some((grab.index, target)), total),
-                None => fit_grid(&grab.from, (grab.index, target), None, total),
+            let at = f64::from(grab.from[grab.index].time_ms);
+            let target = at + at_ms - grab.start_ms;
+            // A grid whose tempo changes moves and scales as a whole, so its changes keep their
+            // shape. A steady one is refitted, which also clears rounding left by earlier edits.
+            let fitted = match (grab.pivot, rbl_anlz::grid::is_dynamic_from(&grab.from, None)) {
+                (Some(p), true) => {
+                    let held = f64::from(grab.from[p].time_ms);
+                    reshape_grid(&grab.from, held, (target - held) / (at - held), 0.0, total)
+                }
+                (None, true) => reshape_grid(&grab.from, at, 1.0, target - at, total),
+                (Some(p), false) => fit_grid(&grab.from, (p, f64::from(grab.from[p].time_ms)), Some((grab.index, target)), total),
+                (None, false) => fit_grid(&grab.from, (grab.index, target), None, total),
             };
             // A drag that asks for an impossible grid (the beats crossing over, say) holds at
             // the last one that worked.
@@ -188,7 +253,7 @@ impl App {
                 if grab.pivot.is_none() {
                     g.pivot_ms = Some(target);
                 }
-                g.undo.push(grab.from);
+                g.push_undo(grab.from);
             }
         }
         self.show_grid_edit();
@@ -215,7 +280,8 @@ impl App {
         if next.is_empty() || next == g.beats {
             return;
         }
-        g.undo.push(std::mem::replace(&mut g.beats, next));
+        let before = std::mem::replace(&mut g.beats, next);
+        g.push_undo(before);
         // The beat put on the playhead is pinned, ready to stretch from.
         if let GridTool::SnapToPlayhead = tool {
             g.pivot_ms = Some(playhead);
@@ -226,8 +292,15 @@ impl App {
     /// Puts the grid back as it was before the last change. False if there's nothing to undo.
     pub fn undo_grid(&mut self) -> bool {
         let Some(g) = self.grid_edit.as_mut() else { return false };
-        let Some(before) = g.undo.pop() else { return false };
+        let Some((before, ramp)) = g.undo.pop() else { return false };
         g.beats = before;
+        // The ramp as it was being shaped then, or none: undoing the first change made after
+        // opening one goes back to it as opened, and the step before that leaves it.
+        g.ramp = ramp;
+        let shaping = g.ramp.is_some();
+        if shaping {
+            self.show_ramp_fields();
+        }
         self.show_grid_edit();
         true
     }
@@ -238,20 +311,43 @@ impl App {
         if !g.changed() {
             return;
         }
-        g.undo.push(std::mem::replace(&mut g.beats, g.saved.clone()));
+        let before = std::mem::replace(&mut g.beats, g.saved.clone());
+        g.push_undo(before);
         g.pivot_ms = None;
+        g.ramp = None;
         self.show_grid_edit();
     }
 
-    /// Shows the edited grid on the deck, in place of the one read from disk, and its tempo in
-    /// the BPM box.
+    /// Shows the edited grid on the deck, in place of the one read from disk, and in the BPM box
+    /// the tempo of the beat a typed tempo would hold still: the pinned beat, or before any, the
+    /// beat nearest the playhead. On a steady grid that's every beat's tempo. On one whose tempo
+    /// changes it's the tempo there, which is the one typing changes.
     pub(crate) fn show_grid_edit(&mut self) {
+        // Outside a drag, what's shown is settled: the next step of undo comes back to it.
+        if let Some(g) = self.grid_edit.as_mut()
+            && !g.holding()
+        {
+            g.settled_ramp = g.ramp.as_ref().map(crate::ramp_edit::RampEdit::settled);
+        }
+        let playhead = self.player.now() * self.deck_duration_ms().unwrap_or(0.0);
         let Some(g) = self.grid_edit.as_ref() else { return };
-        self.grid_bpm = rune::TextEdit::new(format!("{:.2}", f64::from(rbl_anlz::grid::tempo_x100(&g.beats)) / 100.0));
+        let held = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead)).and_then(|i| g.beats.get(i));
+        let tempo = held.map_or_else(|| rbl_anlz::grid::tempo_x100(&g.beats), |b| b.tempo_x100);
+        self.grid_bpm = rune::TextEdit::new(format!("{:.2}", f64::from(tempo) / 100.0));
+        // Mid-drag the tempo changes aren't looked for again on every step, only once it's let go.
+        let dragging = g.holding();
+        let mut look = false;
         if let Some(w) = self.deck_wave.as_mut()
             && g.id == w.id
         {
-            w.beats.clone_from(&g.beats);
+            if w.beats != g.beats {
+                w.beats.clone_from(&g.beats);
+                w.ramps_stale = true;
+            }
+            look = w.ramps_stale && !dragging;
+        }
+        if look {
+            self.find_ramps_later();
         }
     }
 }

@@ -38,7 +38,7 @@ pub use load::{
 };
 pub use smart::SmartRule;
 pub use view::{ListTotals, RelatedCriterion, SearchField, SortColumn, TrackSource, View, ViewSpec};
-pub use xml_export::export_xml;
+pub use xml_export::{export_xml, export_xml_with_grids};
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
