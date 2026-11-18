@@ -119,6 +119,12 @@ pub fn update_downloading(s: &mut App) {
     s.update.status = crate::update::Status::Downloading { build: 14, done: 17_400_000, total: 41_760_823 };
 }
 
+/// Downloaded, and now being checked and unpacked.
+pub fn update_preparing(s: &mut App) {
+    selected(s);
+    s.update.status = crate::update::Status::Preparing { build: 14 };
+}
+
 /// A newer build downloaded and checked, waiting for Restart.
 pub fn update_ready(s: &mut App) {
     selected(s);

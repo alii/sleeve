@@ -22,6 +22,7 @@ pub fn card(s: &App, k: &Kit) -> Option<El> {
         Status::Idle => return None,
         Status::Downloading { .. } => ("Downloading an update", rune::icon(&icons::UPDATE, 14.0).color(c.icon_muted), c.text_base),
         Status::Ready { .. } => ("Update ready", rune::icon(&icons::UPDATE, 14.0).color(c.icon_accent), c.text_base),
+        Status::Preparing { .. } => ("Getting the update ready…", Spinner::new().size(14.0).build(k), c.text_base),
         Status::Installing { .. } => ("Updating…", Spinner::new().size(14.0).build(k), c.text_base),
         Status::Failed { .. } => ("Couldn't update", rune::icon(&icons::WARNING, 14.0).color(c.warning.icon), c.text_base),
         Status::Manual { .. } => ("Update available", rune::icon(&icons::UPDATE, 14.0).color(c.icon_accent), c.text_base),
@@ -36,7 +37,7 @@ pub fn card(s: &App, k: &Kit) -> Option<El> {
     );
     head = head.child(spacer());
     // "Later" hides it until a newer build comes out. Not while it's going in.
-    if !matches!(u.status, Status::Installing { .. } | Status::Downloading { .. }) {
+    if !matches!(u.status, Status::Installing { .. } | Status::Downloading { .. } | Status::Preparing { .. }) {
         head = head.child(
             IconButton::new(&icons::CLOSE)
                 .variant(IconButtonVariant::GhostMuted)
@@ -54,7 +55,7 @@ pub fn card(s: &App, k: &Kit) -> Option<El> {
     let note = |t: String| text(t).font(k.ty.small.lh(16.0)).color(c.text_muted).w_full().wrap();
     let mut body = col().w_full().gap(8.0);
     match &u.status {
-        Status::Idle | Status::Installing { .. } => {}
+        Status::Idle | Status::Preparing { .. } | Status::Installing { .. } => {}
         Status::Downloading { done, total, .. } => {
             let f = if *total > 0 { (*done as f32 / *total as f32).clamp(0.0, 1.0) } else { 0.0 };
             body = body

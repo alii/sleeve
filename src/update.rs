@@ -93,6 +93,8 @@ pub enum Status {
     Idle,
     /// Downloading a newer build.
     Downloading { build: u32, done: u64, total: u64 },
+    /// Downloaded. Now checking the file, unpacking it and checking its signature.
+    Preparing { build: u32 },
     /// The download failed. It's tried again by itself later, or now with Try again.
     Failed { build: u32, why: String },
     /// Downloaded and checked. Restart to use it.
@@ -107,7 +109,7 @@ impl Status {
     pub fn build(&self) -> Option<u32> {
         match self {
             Status::Idle => None,
-            Status::Downloading { build, .. } | Status::Failed { build, .. } | Status::Ready { build } | Status::Installing { build } | Status::Manual { build, .. } => Some(*build),
+            Status::Downloading { build, .. } | Status::Preparing { build } | Status::Failed { build, .. } | Status::Ready { build } | Status::Installing { build } | Status::Manual { build, .. } => Some(*build),
         }
     }
 }
@@ -470,7 +472,7 @@ impl Worker {
     fn say(&self, s: Status) {
         // With a build ready to go in, a newer one downloads quietly. The card keeps its
         // Restart button and switches to the newer build once that's ready.
-        if self.ready.is_some() && matches!(s, Status::Downloading { .. } | Status::Failed { .. }) {
+        if self.ready.is_some() && matches!(s, Status::Downloading { .. } | Status::Preparing { .. } | Status::Failed { .. }) {
             return;
         }
         let _ = self.tx.send(Msg::Status(s));
@@ -687,6 +689,7 @@ impl Worker {
             let _ = fs::remove_file(&file);
             self.download(r, &file)?;
         }
+        self.say(Status::Preparing { build: r.build });
         stage(&self.dir, &file, r.build).map_err(|why| {
             self.log(format!("Build {} didn't check out: {why}", r.build));
             Error::Failed(why)
@@ -725,6 +728,7 @@ impl Worker {
                 Err(e) => return Err(e),
             }
         }
+        self.say(Status::Preparing { build: r.build });
         match sha256(&part) {
             Some(h) if h == r.sha256 => {}
             got => {
