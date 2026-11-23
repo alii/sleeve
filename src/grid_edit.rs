@@ -61,6 +61,16 @@ impl GridEdit {
     pub fn changed(&self) -> bool {
         self.beats != self.saved
     }
+
+    /// Makes `beats` the grid, keeping the one before for undo. Returns false, and changes
+    /// nothing, if they're the same.
+    pub fn commit(&mut self, beats: Vec<Beat>) -> bool {
+        if beats == self.beats {
+            return false;
+        }
+        self.undo.push(std::mem::replace(&mut self.beats, beats));
+        true
+    }
 }
 
 /// The beat nearest `ms`, as an index.
@@ -101,9 +111,7 @@ impl App {
         let pivot = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead));
         match typed.zip(pivot).and_then(|(bpm, p)| crate::deck::retempo(&g.beats, p, bpm, total)) {
             Some(beats) => {
-                if beats != g.beats {
-                    g.undo.push(std::mem::replace(&mut g.beats, beats));
-                }
+                g.commit(beats);
             }
             None => {
                 let why = "Type a tempo from 40 to 499 BPM.".to_owned();
@@ -181,14 +189,14 @@ impl App {
             if let Some(beats) = fitted {
                 g.beats = beats;
             }
+            // The steps of a drag show as they go, but only its end goes on the undo list.
             if let Phase::Up = phase
                 && let Some(grab) = g.grab.take()
-                && g.beats != grab.from
             {
-                if grab.pivot.is_none() {
+                let dropped = std::mem::replace(&mut g.beats, grab.from);
+                if g.commit(dropped) && grab.pivot.is_none() {
                     g.pivot_ms = Some(target);
                 }
-                g.undo.push(grab.from);
             }
         }
         self.show_grid_edit();
@@ -212,10 +220,9 @@ impl App {
             return;
         }
         let next = rbl_anlz::grid::apply_with_duration(&g.beats, None, edit, total as u32);
-        if next.is_empty() || next == g.beats {
+        if next.is_empty() || !g.commit(next) {
             return;
         }
-        g.undo.push(std::mem::replace(&mut g.beats, next));
         // The beat put on the playhead is pinned, ready to stretch from.
         if let GridTool::SnapToPlayhead = tool {
             g.pivot_ms = Some(playhead);
@@ -235,10 +242,9 @@ impl App {
     /// Puts the grid back as it's saved. Undo brings the edits back.
     pub fn revert_grid(&mut self) {
         let Some(g) = self.grid_edit.as_mut() else { return };
-        if !g.changed() {
+        if !g.commit(g.saved.clone()) {
             return;
         }
-        g.undo.push(std::mem::replace(&mut g.beats, g.saved.clone()));
         g.pivot_ms = None;
         self.show_grid_edit();
     }
