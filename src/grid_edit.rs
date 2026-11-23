@@ -162,8 +162,9 @@ impl App {
 
     /// One step of a drag on the zoomed waveform with Grid on. `at_ms` is the time under the
     /// pointer. `stretch`, read at the press, holds the pinned beat still and changes the tempo
-    /// instead of sliding everything.
-    pub fn grid_drag(&mut self, phase: Phase, at_ms: f64, stretch: bool, cancelled: bool) {
+    /// instead of sliding everything. `ms_per_px` is how much time a point on screen covers,
+    /// for telling what's under the pointer. Nothing uses it yet.
+    pub fn grid_drag(&mut self, phase: Phase, at_ms: f64, _ms_per_px: f64, stretch: bool, cancelled: bool) {
         let Some(total) = self.deck_duration_ms().filter(|t| *t > 0.0) else { return };
         let playhead = self.player.now() * total;
         let Some(g) = self.grid_edit.as_mut() else { return };

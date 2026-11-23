@@ -326,26 +326,30 @@ pub fn build(s: &App, width: f32, k: &Kit) -> Option<El> {
     )
 }
 
+/// A small outlined button for the grid tools. The caller says what a press does.
+fn grid_button(key: &'static str, label: &'static str, help: &'static str, k: &Kit) -> El {
+    let c = &k.c;
+    let b = row()
+        .key(key)
+        .h(PAD.1)
+        .px(7.0)
+        .radius(5.0)
+        .center()
+        .role("button")
+        .focusable(true)
+        .cursor(rune::Cursor::Pointer)
+        .border(1.0, c.border_base)
+        .label(help)
+        .help(help)
+        .child(text(label).font(k.ty.small_medium).color(c.text_base));
+    k.interactive(b)
+}
+
 /// The buttons shown in place of the cue pads while editing the grid.
 fn grid_tools(s: &App, k: &Kit) -> El {
     use crate::grid_edit::GridTool;
     let c = &k.c;
-    let tool = |key: &'static str, label: &'static str, help: &'static str, t: GridTool| {
-        let b = row()
-            .key(key)
-            .h(PAD.1)
-            .px(7.0)
-            .radius(5.0)
-            .center()
-            .role("button")
-            .focusable(true)
-            .cursor(rune::Cursor::Pointer)
-            .border(1.0, c.border_base)
-            .label(help)
-            .help(help)
-            .child(text(label).font(k.ty.small_medium).color(c.text_base));
-        k.interactive(b).on_press(move |s: &mut App| s.grid_tool(t))
-    };
+    let tool = |key, label, help, t: GridTool| grid_button(key, label, help, k).on_press(move |s: &mut App| s.grid_tool(t));
     // The tempo, typed in: Return spaces the beats for it around the pinned beat.
     let bpm = rune_kit::TextInput::new(&s.grid_bpm)
         .label("Grid tempo in BPM")
@@ -679,7 +683,7 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
         // worked out afresh each step, so it holds while the track plays.
         if s.grid_editing() {
             let at_ms = s.player.now() * total + f64::from((d.x - d.w / 2.0) / pps.max(1.0)) * 1000.0;
-            s.grid_drag(d.phase, at_ms, tx.mods().alt, d.cancelled());
+            s.grid_drag(d.phase, at_ms, f64::from(1000.0 / pps.max(1.0)), tx.mods().alt, d.cancelled());
             return;
         }
         match d.phase {
