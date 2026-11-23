@@ -3201,6 +3201,19 @@ impl Writer {
         if content_uuid.is_none() {
             return Err(DbError::WriteRefused(format!("no track {content}")));
         }
+        // One hot cue per pad. Checked here, in the same transaction as the
+        // insert, because a caller's idea of which pads are free can be out
+        // of date by the time it writes.
+        if !memory {
+            let taken: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM djmdCue WHERE ContentID = ?1 AND Kind = ?2 AND rb_local_deleted = 0",
+                params![content, i64::from(kind)],
+                |r| r.get(0),
+            )?;
+            if taken > 0 {
+                return Err(DbError::WriteRefused(format!("track {content} already has a hot cue on pad kind {kind}")));
+            }
+        }
 
         let usn = next_usn(&tx)?;
         tx.execute(
@@ -3448,6 +3461,24 @@ impl Writer {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// A track's live hot cues, as `(Kind, InMsec)`. A read, so nothing is
+    /// prepared or gated.
+    pub fn hot_cues(&self, content: &str) -> Result<Vec<(u8, u32)>> {
+        let conn = self.library.connection();
+        let mut stmt = conn.prepare(
+            "SELECT Kind, InMsec FROM djmdCue WHERE ContentID = ?1 AND Kind > 0 AND rb_local_deleted = 0",
+        )?;
+        let rows = stmt.query_map(params![content], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (kind, ms) = row?;
+            out.push((u8::try_from(kind).unwrap_or(u8::MAX), u32::try_from(ms.max(0)).unwrap_or(u32::MAX)));
+        }
+        Ok(out)
     }
 
     /// Soft-deletes a cue.

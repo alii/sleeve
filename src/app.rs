@@ -104,6 +104,8 @@ pub struct App {
     pub app_menu: bool,
     /// Draws the Windows title bar on a Mac too, for the `windows-titlebar` snapshot.
     pub preview_titlebar: bool,
+    /// The menu beside the Analyse button is open.
+    pub analyse_menu: bool,
     /// The right-click (or "+") menu that's open, and where.
     pub menu: Option<crate::ui::menus::OpenMenu>,
     pub filter_search: TextEdit,
@@ -201,6 +203,7 @@ impl App {
             filter_menu: false,
             app_menu: false,
             preview_titlebar: false,
+            analyse_menu: false,
             menu: None,
             filter_search: TextEdit::new(""),
             bpm_from: TextEdit::new(""),
@@ -423,7 +426,7 @@ impl App {
                 self.spawn_analysis(title, tracks);
             }
         }
-        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Analysis | JobKind::Edit | JobKind::Import)) {
+        if finished.iter().any(|(_, kind)| matches!(kind, JobKind::Analysis | JobKind::Edit | JobKind::Import | JobKind::AutoCue)) {
             self.start_reload();
         }
         changed |= self.tick_edit(tx);
@@ -677,6 +680,20 @@ impl App {
         let tracks = crate::analysis::tracks(&l.index, &rows);
         let title = if tracks.len() == 1 { format!("Analysing {}", tracks[0].title) } else { format!("Analysing {} tracks", tracks.len()) };
         self.spawn_analysis(title, tracks);
+    }
+
+    /// What Auto-cue would act on: the selection only, as cues only go on tracks someone picked.
+    /// Starts a job that places hot cues on the empty pads of the selected tracks.
+    pub fn auto_cue(&mut self) {
+        let Some(l) = self.loaded() else { return };
+        let rows = self.selected_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let tracks = crate::autocue::tracks(&l.index, &rows);
+        let store = l.store.clone();
+        let title = if tracks.len() == 1 { format!("Auto-cueing {}", tracks[0].title) } else { format!("Auto-cueing {} tracks", tracks.len()) };
+        self.jobs.spawn(JobKind::AutoCue, title, move |rep| crate::autocue::run(&store, tracks, rep));
     }
 
     fn sync_wave(&mut self) {

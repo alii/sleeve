@@ -1642,6 +1642,20 @@ fn a_cue_on_a_track_that_is_not_there_is_refused() {
 }
 
 #[test]
+fn a_taken_pad_refuses_a_second_hot_cue() {
+    let mut f = fixture();
+    let first = f.writer.add_cue(&track_id(0), 3, 1_000).unwrap();
+    assert!(matches!(f.writer.add_cue(&track_id(0), 3, 2_000), Err(DbError::WriteRefused(_))));
+    assert_eq!(f.writer.hot_cues(&track_id(0)).unwrap(), vec![(3, 1_000)]);
+    // Memory cues stack, and a deleted hot cue frees its pad.
+    f.writer.add_cue(&track_id(0), 0, 5_000).unwrap();
+    f.writer.add_cue(&track_id(0), 0, 5_000).unwrap();
+    f.writer.delete_cue(&first).unwrap();
+    f.writer.add_cue(&track_id(0), 3, 2_000).unwrap();
+    assert_eq!(f.writer.hot_cues(&track_id(0)).unwrap(), vec![(3, 2_000)]);
+}
+
+#[test]
 fn a_cue_moves_and_soft_deletes() {
     let mut f = fixture();
     let id = f.writer.add_cue(&track_id(0), 1, 1_000).unwrap();
