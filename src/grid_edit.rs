@@ -13,7 +13,7 @@ use rbl_anlz::Beat;
 use rune::Phase;
 
 use crate::app::App;
-use crate::deck::fit_grid;
+use crate::grid_map::{fit_grid, nearest};
 use crate::jobs::{JobKind, Outcome};
 
 /// A grid being edited.
@@ -73,11 +73,6 @@ impl GridEdit {
     }
 }
 
-/// The beat nearest `ms`, as an index.
-fn nearest(beats: &[Beat], ms: f64) -> Option<usize> {
-    rbl_anlz::grid::nearest_index(beats, ms.round().max(0.0) as u32)
-}
-
 impl App {
     /// Whether Grid is on for the track on the deck.
     pub fn grid_editing(&self) -> bool {
@@ -109,7 +104,7 @@ impl App {
         let typed = self.grid_bpm.text.trim().replace(',', ".").parse::<f64>().ok();
         let Some(g) = self.grid_edit.as_mut() else { return };
         let pivot = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead));
-        match typed.zip(pivot).and_then(|(bpm, p)| crate::deck::retempo(&g.beats, p, bpm, total)) {
+        match typed.zip(pivot).and_then(|(bpm, p)| crate::grid_map::retempo(&g.beats, p, bpm, total)) {
             Some(beats) => {
                 g.commit(beats);
             }

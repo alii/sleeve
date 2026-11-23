@@ -94,72 +94,6 @@ pub fn nudge_target(beats: &[rbl_anlz::Beat], ms: f64, n: i64) -> f64 {
     times[j.clamp(0, times.len() as i64 - 1) as usize]
 }
 
-/// A steady 4/4 grid refitted to where beats were dropped. `a` says beat `a.0` of `beats`
-/// belongs at `a.1` ms; `b`, if given, pins a second beat the same way. With one anchor the
-/// grid slides there and keeps its tempo. With two, the tempo is whatever puts both beats
-/// where they were dropped, so fixing one end never moves the other. Bars carry over from
-/// `beats`. The grid runs from the start of the track up to `track_ms`.
-///
-/// None if there's nothing to fit, or the anchors make no sense: the same beat twice, beats
-/// dropped out of order, or a tempo outside the 40 to 499 BPM rekordbox allows.
-///
-/// Indices are into `beats`, the grid before the fit. A slide can add or drop beats at the
-/// start, so the same beat may have a different index in what comes back.
-pub fn fit_grid(beats: &[rbl_anlz::Beat], a: (usize, f64), b: Option<(usize, f64)>, track_ms: f64) -> Option<Vec<rbl_anlz::Beat>> {
-    let (ia, ta) = a;
-    let anchor = *beats.get(ia)?;
-    let period = match b {
-        Some((ib, tb)) => {
-            beats.get(ib)?;
-            if ib == ia {
-                return None;
-            }
-            (tb - ta) / (ib as f64 - ia as f64)
-        }
-        // One anchor keeps the tempo: the average gap over the whole grid, which is closer
-        // than the BPM rounded to hundredths on each beat.
-        None => {
-            if beats.len() < 2 {
-                return None;
-            }
-            let (first, last) = (beats[0].time_ms, beats[beats.len() - 1].time_ms);
-            (f64::from(last) - f64::from(first)) / (beats.len() - 1) as f64
-        }
-    };
-    let bpm = 60_000.0 / period;
-    let range = f64::from(rbl_anlz::grid::MIN_BPM_X100) / 100.0..=f64::from(rbl_anlz::grid::MAX_BPM_X100) / 100.0;
-    // Also catches NaN and beats dropped out of order, which make the tempo negative.
-    if !range.contains(&bpm) || !ta.is_finite() || !track_ms.is_finite() {
-        return None;
-    }
-    let tempo_x100 = (bpm * 100.0).round() as u16;
-    // Each beat's time is worked out from the anchor and rounded on its own, so rounding to
-    // whole ms never adds up along the track.
-    let mut k = (-ta / period).ceil() as i64;
-    let mut out = Vec::new();
-    loop {
-        let t = ta + k as f64 * period;
-        if t >= track_ms {
-            break;
-        }
-        let beat_number = ((i64::from(anchor.beat_number) - 1 + k).rem_euclid(4) + 1) as u16;
-        out.push(rbl_anlz::Beat { beat_number, tempo_x100, time_ms: t.round().max(0.0) as u32 });
-        k += 1;
-    }
-    (!out.is_empty()).then_some(out)
-}
-
-/// The grid at `bpm`, with beat `pivot` of `beats` held where it is: a tempo typed in, with
-/// the beats spaced to match and nothing analysed again. Bars carry over. None outside
-/// rekordbox's tempo range, or for a grid of one beat, which has no spacing to change.
-pub fn retempo(beats: &[rbl_anlz::Beat], pivot: usize, bpm: f64, track_ms: f64) -> Option<Vec<rbl_anlz::Beat>> {
-    let t = f64::from(beats.get(pivot)?.time_ms);
-    // Any second beat will do: it's put one gap away (or one back) at the new tempo.
-    let other = if pivot + 1 < beats.len() { pivot + 1 } else { pivot.checked_sub(1)? };
-    let gap = 60_000.0 / bpm;
-    fit_grid(beats, (pivot, t), Some((other, t + (other as f64 - pivot as f64) * gap)), track_ms)
-}
-
 /// A track's beat grid from its analysis file, in time order. Empty if it has none. Reads the
 /// disk, so never on the main thread.
 pub(crate) fn read_beats(share: &std::path::Path, rel: &str) -> Vec<rbl_anlz::Beat> {
@@ -547,7 +481,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_grid, grid_pos, nearest_beat, nudge_target, retempo};
+    use super::{grid_pos, nearest_beat, nudge_target};
     use rbl_anlz::Beat;
 
     fn grid() -> Vec<Beat> {
@@ -589,74 +523,5 @@ mod tests {
         assert_eq!(grid_pos(&g, 520.0).map(|p| (p.bar, p.beat)), Some((1, 1)));
         assert_eq!(grid_pos(&g, 3100.0).map(|p| (p.bar, p.beat)), Some((2, 2)));
         assert_eq!(grid_pos(&g, 0.0).unwrap().bpm, 120.0);
-    }
-
-    #[test]
-    fn one_anchor_slides_the_grid_and_keeps_the_tempo() {
-        let g = grid();
-        let fit = fit_grid(&g, (2, 1100.0), None, 6000.0).unwrap();
-        let moved: Vec<Beat> = g.iter().map(|b| Beat { time_ms: b.time_ms + 100, ..*b }).collect();
-        assert_eq!(fit, moved);
-    }
-
-    #[test]
-    fn sliding_fills_the_grid_to_both_ends_of_the_track() {
-        // Back 200 ms: the pickup at 0 would land before the start, so it goes, and there's
-        // room for one more beat before 6000.
-        let fit = fit_grid(&grid(), (1, 300.0), None, 6000.0).unwrap();
-        assert_eq!((fit[0].time_ms, fit[0].beat_number), (300, 1));
-        assert_eq!(fit.last().map(|b| b.time_ms), Some(5800));
-        // Forward 600 ms: a beat now fits before the old first one, and it's the beat before.
-        let fit = fit_grid(&grid(), (0, 600.0), None, 6000.0).unwrap();
-        assert_eq!((fit[0].time_ms, fit[0].beat_number), (100, 3));
-    }
-
-    #[test]
-    fn two_anchors_set_the_tempo_without_moving_either() {
-        // The grid says 120 BPM but the track is 121: beat 9 really falls at 500 + 8 gaps.
-        let gap = 60_000.0 / 121.0;
-        let fit = fit_grid(&grid(), (1, 500.0), Some((9, 500.0 + 8.0 * gap)), 6000.0).unwrap();
-        let at = |ms: u32| fit.iter().find(|b| b.time_ms == ms).copied();
-        assert_eq!(at(500).map(|b| (b.beat_number, b.tempo_x100)), Some((1, 12100)));
-        assert_eq!(at((500.0 + 8.0 * gap).round() as u32).map(|b| b.beat_number), Some(1));
-        // Which anchor was dragged last doesn't matter.
-        assert_eq!(Some(fit), fit_grid(&grid(), (9, 500.0 + 8.0 * gap), Some((1, 500.0)), 6000.0));
-    }
-
-    #[test]
-    fn rounding_to_whole_ms_never_drifts() {
-        // Over 1000 beats at 127.5 BPM, every beat is within half a ms of where it should be.
-        let g: Vec<Beat> = (0..2).map(|i| Beat { beat_number: i + 1, tempo_x100: 12000, time_ms: u32::from(i) * 500 }).collect();
-        let gap = 60_000.0 / 127.5;
-        let fit = fit_grid(&g, (0, 0.0), Some((1, gap)), 1000.0 * gap - 1.0).unwrap();
-        assert_eq!(fit.len(), 1000);
-        for (k, b) in fit.iter().enumerate() {
-            assert!((f64::from(b.time_ms) - k as f64 * gap).abs() <= 0.5, "beat {k} at {}", b.time_ms);
-        }
-    }
-
-    #[test]
-    fn a_typed_tempo_respaces_the_grid_around_the_pinned_beat() {
-        // Beat 5 (2500 ms, a beat 1) holds still; the rest move to 125 BPM, 480 ms apart.
-        let fit = retempo(&grid(), 5, 125.0, 6000.0).unwrap();
-        let at = |ms: u32| fit.iter().find(|b| b.time_ms == ms).map(|b| (b.beat_number, b.tempo_x100));
-        assert_eq!(at(2500), Some((1, 12500)));
-        assert_eq!(at(2980), Some((2, 12500)));
-        assert_eq!(at(2020), Some((4, 12500)));
-        // The last beat holds too, measuring back from the one before.
-        assert!(retempo(&grid(), 11, 125.0, 6000.0).unwrap().iter().any(|b| b.time_ms == 5500));
-        assert_eq!(retempo(&grid(), 5, 39.0, 6000.0), None, "slower than rekordbox allows");
-        assert_eq!(retempo(&grid()[..1], 0, 125.0, 6000.0), None, "one beat has no spacing");
-    }
-
-    #[test]
-    fn anchors_that_make_no_sense_are_refused() {
-        let g = grid();
-        assert_eq!(fit_grid(&g, (3, 1500.0), Some((3, 1600.0)), 6000.0), None, "same beat twice");
-        assert_eq!(fit_grid(&g, (1, 500.0), Some((5, 400.0)), 6000.0), None, "out of order");
-        assert_eq!(fit_grid(&g, (1, 500.0), Some((2, 501.0)), 6000.0), None, "60000 BPM");
-        assert_eq!(fit_grid(&g, (99, 500.0), None, 6000.0), None, "no such beat");
-        assert_eq!(fit_grid(&g[..1], (0, 500.0), None, 6000.0), None, "no tempo to keep");
-        assert_eq!(fit_grid(&[], (0, 0.0), None, 6000.0), None, "no grid");
     }
 }

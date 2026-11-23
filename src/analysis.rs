@@ -545,7 +545,7 @@ pub(crate) mod tests {
 
         // 50 ms later and a touch faster, as if two anchors had been dragged.
         let gap = 60_000.0 / 121.0;
-        let edited = crate::deck::fit_grid(&old, (0, f64::from(old[0].time_ms) + 50.0), Some((8, f64::from(old[0].time_ms) + 50.0 + 8.0 * gap)), 30_000.0).unwrap();
+        let edited = crate::grid_map::fit_grid(&old, (0, f64::from(old[0].time_ms) + 50.0), Some((8, f64::from(old[0].time_ms) + 50.0 + 8.0 * gap)), 30_000.0).unwrap();
         save_grid(&store, &rbl_db::fixture::track_id(0).to_string(), &rel, &edited).unwrap();
 
         let saved = read(&dat);
