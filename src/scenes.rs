@@ -190,3 +190,41 @@ pub fn update_collapsed(s: &mut App) {
     update_ready(s);
     s.sidebar.toggle();
 }
+
+/// The `playing` scene with tempo changes in the deck track's grid, zoomed out to show them: a
+/// ramp up 8 BPM just before the playhead, and an instant drop back down just after.
+pub fn tempo_change(s: &mut App) {
+    playing(s);
+    // The grid and zoomed waveform are read here, not on the deck's worker, whose copy would
+    // land after the scene and put the grid on disk back.
+    s.deck_grid_rx = None;
+    let (Some(l), Some(row), Some(total)) = (s.loaded(), s.deck_row(), s.deck_duration_ms()) else { return };
+    let (share, rel) = (l.location.share_root.clone(), l.index.analysis_path.get(row as usize).to_owned());
+    let playhead = s.player.now() * total;
+    let Some(beats) = with_tempo_changes(&crate::deck::read_beats(&share, &rel), playhead, total) else { return };
+    if let Some(w) = s.deck_wave.as_mut() {
+        w.runs = crate::grid_map::runs(&beats);
+        w.beats = beats;
+        w.detail = crate::waveform::load_detail(&share, &rel);
+    }
+    s.zoom_secs = 8.0;
+}
+
+/// `beats` speeding up by 8 BPM over six beats from 3 s before `at`, holding the new tempo for
+/// four beats, then dropping straight back to the old one until the end of the track.
+fn with_tempo_changes(beats: &[rbl_anlz::Beat], at: f64, total: f64) -> Option<Vec<rbl_anlz::Beat>> {
+    let start = crate::grid_map::nearest(beats, at - 3000.0)?;
+    let slow = f64::from(beats[start].tempo_x100) / 100.0;
+    let fast = slow + 8.0;
+    let mut t = f64::from(beats[start].time_ms);
+    let mut times = Vec::new();
+    let tempos = (1..=6).map(|k| slow + 8.0 * f64::from(k) / 7.0).chain(std::iter::repeat_n(fast, 4)).chain(std::iter::repeat(slow));
+    for bpm in tempos {
+        if t >= total {
+            break;
+        }
+        times.push(t);
+        t += 60_000.0 / bpm;
+    }
+    crate::grid_map::splice(beats, start..beats.len(), &times, total)
+}

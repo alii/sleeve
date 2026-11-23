@@ -258,6 +258,7 @@ impl App {
             && g.id == w.id
         {
             w.beats.clone_from(&g.beats);
+            w.runs = runs(&g.beats);
         }
     }
 }

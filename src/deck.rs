@@ -29,6 +29,8 @@ pub struct DeckWave {
     pub art: Option<rune::Image>,
     /// The track's beat grid from its analysis file, in time order. Empty if it has none.
     pub beats: Vec<rbl_anlz::Beat>,
+    /// Where the grid's tempo holds and where it changes, worked out from `beats`.
+    pub runs: Vec<crate::grid_map::Run>,
     /// The zoomed waveform, if the track has a detailed one.
     pub detail: Option<crate::waveform::Detail>,
 }
@@ -38,6 +40,7 @@ pub struct DeckGrid {
     id: String,
     generation: u64,
     beats: Vec<rbl_anlz::Beat>,
+    runs: Vec<crate::grid_map::Run>,
     detail: Option<crate::waveform::Detail>,
 }
 
@@ -231,7 +234,7 @@ impl App {
             Some(art) => Some(art),
             None => self.artwork_for(row, 88.0),
         };
-        let (beats, detail) = prev.map_or_else(|| (Vec::new(), None), |w| (w.beats, w.detail));
+        let (beats, runs, detail) = prev.map_or_else(|| (Vec::new(), Vec::new(), None), |w| (w.beats, w.runs, w.detail));
         let Some(l) = self.loaded() else { return };
         // The grid and the zoomed waveform are read on a worker, never here: the disk may be
         // slow, and the window must keep drawing. They land in `poll`.
@@ -239,15 +242,16 @@ impl App {
         let (share, generation, wanted, waker) = (l.location.share_root.clone(), l.generation, id.clone(), self.waker.clone());
         std::thread::spawn(move || {
             let beats = read_beats(&share, &rel);
+            let runs = crate::grid_map::runs(&beats);
             let detail = crate::waveform::load_detail(&share, &rel);
-            if tx.send(DeckGrid { id: wanted, generation, beats, detail }).is_ok()
+            if tx.send(DeckGrid { id: wanted, generation, beats, runs, detail }).is_ok()
                 && let Some(w) = waker
             {
                 w();
             }
         });
         self.deck_grid_rx = Some(rx);
-        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats, detail });
+        self.deck_wave = Some(DeckWave { id, generation, pixels, art, beats, runs, detail });
     }
 
     /// Takes the grid and zoomed waveform once the worker has read them. Returns true when
@@ -258,6 +262,7 @@ impl App {
         let landed = match self.deck_wave.as_mut() {
             Some(w) if w.id == grid.id && w.generation == grid.generation => {
                 w.beats = grid.beats;
+                w.runs = grid.runs;
                 w.detail = grid.detail;
                 true
             }
@@ -394,6 +399,11 @@ impl App {
     /// The deck track's beat grid, if it has one.
     pub fn deck_beats(&self) -> &[rbl_anlz::Beat] {
         self.deck_wave.as_ref().filter(|w| self.player.is_on(&w.id)).map_or(&[], |w| &w.beats)
+    }
+
+    /// Where the deck track's tempo holds and where it changes.
+    pub fn deck_runs(&self) -> &[crate::grid_map::Run] {
+        self.deck_wave.as_ref().filter(|w| self.player.is_on(&w.id)).map_or(&[], |w| &w.runs)
     }
 
     /// With quantise on, the beat nearest `ms`; otherwise `ms` as it is.

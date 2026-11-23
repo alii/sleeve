@@ -27,6 +27,11 @@ pub fn memory_colour() -> Color {
     oklch(0.64, 0.21, 25.0)
 }
 
+/// Tempo changes are mint green, apart from the blue of the grid tools and the cue colours.
+pub fn tempo_colour() -> Color {
+    if crate::waveform::light() { oklch(0.55, 0.12, 165.0) } else { oklch(0.84, 0.13, 165.0) }
+}
+
 /// rekordbox's memory cue mark: a small triangle pointing down at the cue's line.
 pub fn memory_mark() -> El {
     rune::canvas(rune::Shape::new().fill(vec![[0.0, 0.0], [10.0, 0.0], [5.0, 7.0]], memory_colour()).view_box(10.0, 7.0)).size(10.0, 7.0)
@@ -570,6 +575,7 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             world = world.child(el().key(key).absolute(x - 0.5, 0.0).size(1.0, ZOOM_H).fill(screen_ink().alpha(0.2)));
         }
     }
+    world = tempo_changes(world, beats, s.deck_runs(), &x_of, reach, k);
     // Hot cues: a full-height line and a lettered flag.
     for (slot, cue) in cues.iter().enumerate() {
         let Some(cue) = cue else { continue };
@@ -688,4 +694,45 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             }
         }
     })
+}
+
+/// Marks the grid's tempo changes on the zoomed waveform's moving layer: a tint across one that
+/// takes a few beats, a line at one that's instant, and the tempos either side, like "120.00 →
+/// 128.00". `reach` is how far right the layer is drawn.
+fn tempo_changes(mut world: El, beats: &[rbl_anlz::Beat], runs: &[crate::grid_map::Run], x_of: &dyn Fn(f32) -> f32, reach: f32, k: &Kit) -> El {
+    let ink = tempo_colour();
+    let x_at = |i: usize| x_of(beats[i.min(beats.len() - 1)].time_ms as f32 / 1000.0);
+    let style = rune::TextStyle { size: 10.0, ..k.ty.small_medium.features("'tnum' 1") };
+    for (i, run) in runs.iter().enumerate() {
+        let key = format!("deck-zoom-tempo-{i}");
+        let (x0, x1, (from, to)) = if !run.steady {
+            // It runs from the last beat at the old tempo to the first at the new one.
+            (x_at(run.beats.start.saturating_sub(1)), x_at(run.beats.end), run.tempos(beats))
+        } else if i > 0 && runs[i - 1].steady {
+            let x = x_at(run.beats.start);
+            (x, x, (runs[i - 1].tempos(beats).0, run.tempos(beats).0))
+        } else {
+            continue;
+        };
+        if x1 < -120.0 || x0 > reach {
+            continue;
+        }
+        if x1 > x0 {
+            world = world
+                .child(el().key(format!("{key}-tint")).absolute(x0, 0.0).size(x1 - x0, ZOOM_H).fill(ink.alpha(0.14)))
+                .child(el().key(format!("{key}-start")).absolute(x0 - 0.5, 0.0).size(1.0, ZOOM_H).fill(ink.alpha(0.6)))
+                .child(el().key(format!("{key}-end")).absolute(x1 - 0.5, 0.0).size(1.0, ZOOM_H).fill(ink.alpha(0.6)));
+        } else {
+            world = world.child(el().key(format!("{key}-line")).absolute(x0 - 1.0, 0.0).size(2.0, ZOOM_H).fill(ink.alpha(0.9)));
+        }
+        let label = row()
+            .key(format!("{key}-label"))
+            .absolute(x0 + 5.0, 16.0)
+            .px(3.0)
+            .radius(3.0)
+            .fill(screen().alpha(0.75))
+            .child(text(format!("{from:.2} → {to:.2}")).font(style).color(ink));
+        world = world.child(label);
+    }
+    world
 }

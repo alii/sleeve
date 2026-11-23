@@ -29,7 +29,6 @@ pub struct Run {
 impl Run {
     /// The tempo going in and coming out, in BPM. For a change, these are the tempos either
     /// side of it. For a steady run, both are its tempo.
-    #[allow(dead_code)]
     pub fn tempos(&self, beats: &[Beat]) -> (f64, f64) {
         let bpm = |i: usize| f64::from(beats[i].tempo_x100) / 100.0;
         let (start, end) = (self.beats.start, self.beats.end);
