@@ -29,6 +29,7 @@ pub struct Run {
 impl Run {
     /// The tempo going in and coming out, in BPM. For a change, these are the tempos either
     /// side of it. For a steady run, both are its tempo.
+    #[allow(dead_code)]
     pub fn tempos(&self, beats: &[Beat]) -> (f64, f64) {
         let bpm = |i: usize| f64::from(beats[i].tempo_x100) / 100.0;
         let (start, end) = (self.beats.start, self.beats.end);
@@ -82,6 +83,7 @@ pub fn run_at(runs: &[Run], i: usize) -> Option<&Run> {
 /// to the beat after it, so everything after the range moves by that one amount, with every
 /// gap and tempo copied. Bars count on across the new beats. Beats past `track_ms` are dropped,
 /// and if the grid now stops short of it, it carries on at its last gap, as rekordbox does.
+/// At the start of the grid, new beats before 0 ms are left out, but still count in the bars.
 ///
 /// None if the range is empty or out of bounds, if a beat would land before the one in front
 /// of it, or if a gap would be outside the 40 to 499 BPM rekordbox allows.
@@ -94,10 +96,11 @@ pub fn splice(beats: &[Beat], range: Range<usize>, new_times: &[f64], track_ms: 
         (f64::from(MIN_BPM_X100)..=f64::from(MAX_BPM_X100)).contains(&x100).then_some(x100 as u16)
     };
     let prefix = &beats[..range.start];
+    let skip = if prefix.is_empty() { new_times.iter().take_while(|t| t.round() < 0.0).count() } else { 0 };
     let mut times = Vec::with_capacity(new_times.len());
     // Each beat is checked against the one in front of it, starting from the last kept beat.
     let mut before = prefix.last().map(|b| f64::from(b.time_ms));
-    for &t in new_times {
+    for &t in &new_times[skip..] {
         if !t.is_finite() || t < 0.0 || t > f64::from(u32::MAX) {
             return None;
         }
@@ -114,7 +117,7 @@ pub fn splice(beats: &[Beat], range: Range<usize>, new_times: &[f64], track_ms: 
     let mut out = prefix.to_vec();
     let first_number = match prefix.last() {
         Some(b) => next_number(b.beat_number),
-        None => beats[range.start].beat_number,
+        None => number_after(beats[range.start].beat_number, skip as i64),
     };
     let old_last = beats[range.end - 1];
     let has_tail = range.end < beats.len();
@@ -132,7 +135,7 @@ pub fn splice(beats: &[Beat], range: Range<usize>, new_times: &[f64], track_ms: 
     }
     // Everything after moves by one amount. Bars shift by however many beats were added.
     let shift = i64::from(out[out.len() - 1].time_ms) - i64::from(old_last.time_ms);
-    let added = times.len() as i64 - range.len() as i64;
+    let added = new_times.len() as i64 - range.len() as i64;
     for b in &beats[range.end..] {
         let time_ms = u32::try_from(i64::from(b.time_ms) + shift).ok()?;
         out.push(Beat { time_ms, beat_number: number_after(b.beat_number, added), ..*b });
@@ -359,7 +362,8 @@ mod tests {
         for _ in 0..500 {
             let start = (next() % 23) as usize;
             let end = start + 1 + (next() % (24 - start as u64 - 1)) as usize;
-            let shift = (next() % 101) as f64 - 50.0;
+            // At the start of the grid, a move back would drop beats, which is checked below.
+            let shift = if start == 0 { (next() % 51) as f64 } else { (next() % 101) as f64 - 50.0 };
             let scale = 0.9 + (next() % 21) as f64 / 100.0;
             let t0 = f64::from(g[start].time_ms);
             let new: Vec<f64> = times(&g[start..end]).iter().map(|t| t0 + shift + (t - t0) * scale).collect();
@@ -401,6 +405,19 @@ mod tests {
         let last = out.len() - 1;
         assert_eq!(out[last].time_ms - out[last - 1].time_ms, 400);
         assert_eq!(out[last].tempo_x100, 15000);
+    }
+
+    #[test]
+    fn beats_before_the_track_starts_are_left_out() {
+        // The first run slows to 100 BPM around beat 2, so beat 0 would be at -200 ms.
+        let g = two_tempos();
+        let new: Vec<f64> = (0..17).map(|i| 1000.0 + (f64::from(i) - 2.0) * 600.0).collect();
+        let out = splice(&g, 0..17, &new, 60_000.0).unwrap();
+        assert_eq!((out[0].time_ms, out[0].beat_number), (400, 2));
+        // Old beat 16 is now beat 15, and still 128 BPM into the beat after.
+        assert_eq!(out[16].time_ms - out[15].time_ms, g[17].time_ms - g[16].time_ms);
+        assert_eq!(out[15].tempo_x100, 12800);
+        assert_eq!(out[15].beat_number, g[16].beat_number);
     }
 
     #[test]

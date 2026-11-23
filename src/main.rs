@@ -9,8 +9,6 @@ mod import;
 mod export;
 mod filters;
 mod grid_edit;
-// Runs and splices are tested here but not used by the editor yet.
-#[allow(dead_code)]
 mod grid_map;
 mod scenes;
 mod store;

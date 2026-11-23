@@ -7,13 +7,16 @@
 //! that drifts is fixed by sliding a beat near the start onto its kick, then stretching from
 //! one near the end.
 //!
+//! A grid whose tempo changes keeps its changes. Sliding moves every beat by the same amount,
+//! and stretching or typing a tempo respaces only the steady stretch the pinned beat is in.
+//!
 //! Edits stay in memory, with undo and revert, until Grid is turned off, which saves once.
 
 use rbl_anlz::Beat;
 use rune::Phase;
 
 use crate::app::App;
-use crate::grid_map::{fit_grid, nearest};
+use crate::grid_map::{fit_grid, nearest, respace_run, retempo, run_at, runs};
 use crate::jobs::{JobKind, Outcome};
 
 /// A grid being edited.
@@ -104,13 +107,16 @@ impl App {
         let typed = self.grid_bpm.text.trim().replace(',', ".").parse::<f64>().ok();
         let Some(g) = self.grid_edit.as_mut() else { return };
         let pivot = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead));
-        match typed.zip(pivot).and_then(|(bpm, p)| crate::grid_map::retempo(&g.beats, p, bpm, total)) {
-            Some(beats) => {
+        match typed.zip(pivot).ok_or(TempoRefused::OutOfRange).and_then(|(bpm, p)| typed_tempo(&g.beats, p, bpm, total)) {
+            Ok(beats) => {
                 g.commit(beats);
             }
-            None => {
-                let why = "Type a tempo from 40 to 499 BPM.".to_owned();
-                self.jobs.spawn(JobKind::Edit, "Setting the tempo", move |_| Outcome::Failed(why));
+            Err(refused) => {
+                let why = match refused {
+                    TempoRefused::OutOfRange => "Type a tempo from 40 to 499 BPM.",
+                    TempoRefused::Changing => "The tempo is changing at the pinned beat. Pin a beat where it holds steady to set its tempo.",
+                };
+                self.jobs.spawn(JobKind::Edit, "Setting the tempo", move |_| Outcome::Failed(why.to_owned()));
             }
         }
         self.show_grid_edit();
@@ -175,10 +181,7 @@ impl App {
         } else {
             // The grabbed beat moves as far as the pointer has, so it doesn't jump to it.
             let target = f64::from(grab.from[grab.index].time_ms) + at_ms - grab.start_ms;
-            let fitted = match grab.pivot {
-                Some(p) => fit_grid(&grab.from, (p, f64::from(grab.from[p].time_ms)), Some((grab.index, target)), total),
-                None => fit_grid(&grab.from, (grab.index, target), None, total),
-            };
+            let fitted = dragged(&grab.from, grab.index, target, grab.pivot, total);
             // A drag that asks for an impossible grid (the beats crossing over, say) holds at
             // the last one that worked.
             if let Some(beats) = fitted {
@@ -244,15 +247,164 @@ impl App {
         self.show_grid_edit();
     }
 
-    /// Shows the edited grid on the deck, in place of the one read from disk, and its tempo in
-    /// the BPM box.
+    /// Shows the edited grid on the deck, in place of the one read from disk, and in the BPM
+    /// box the tempo where the pinned beat is (before any, the beat nearest the playhead).
     pub(crate) fn show_grid_edit(&mut self) {
+        let playhead = self.player.now() * self.deck_duration_ms().unwrap_or(0.0);
         let Some(g) = self.grid_edit.as_ref() else { return };
-        self.grid_bpm = rune::TextEdit::new(format!("{:.2}", f64::from(rbl_anlz::grid::tempo_x100(&g.beats)) / 100.0));
+        let bpm = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead)).map_or(0.0, |p| tempo_at(&g.beats, p));
+        self.grid_bpm = rune::TextEdit::new(format!("{bpm:.2}"));
         if let Some(w) = self.deck_wave.as_mut()
             && g.id == w.id
         {
             w.beats.clone_from(&g.beats);
         }
+    }
+}
+
+/// Why a typed tempo wasn't set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TempoRefused {
+    /// It couldn't be read, or it's outside the 40 to 499 BPM rekordbox allows.
+    OutOfRange,
+    /// The pinned beat is where the tempo changes, so there's no one tempo there to set.
+    Changing,
+}
+
+/// Whether the grid has more than one tempo in it.
+fn dynamic(beats: &[Beat]) -> bool {
+    rbl_anlz::grid::is_dynamic_from(beats, None)
+}
+
+/// The tempo at beat `i`, in BPM: its steady run's, or its own where the tempo is changing.
+fn tempo_at(beats: &[Beat], i: usize) -> f64 {
+    let runs = runs(beats);
+    let at = run_at(&runs, i).filter(|r| r.steady).map_or(i, |r| r.beats.start);
+    f64::from(beats[at].tempo_x100) / 100.0
+}
+
+/// The grid `from` with beat `index` dragged to `target` ms. Without a pivot the whole grid
+/// slides. With one, the pivot holds still and the tempo changes so the grabbed beat follows.
+///
+/// A grid with one tempo is refitted as one steady grid. A grid whose tempo changes keeps
+/// every beat's own tempo when it slides, and when stretched only the steady run under the
+/// pivot is respaced, with everything after it moved along as it was.
+fn dragged(from: &[Beat], index: usize, target: f64, pivot: Option<usize>, total: f64) -> Option<Vec<Beat>> {
+    if !dynamic(from) {
+        return match pivot {
+            Some(p) => fit_grid(from, (p, f64::from(from[p].time_ms)), Some((index, target)), total),
+            None => fit_grid(from, (index, target), None, total),
+        };
+    }
+    let Some(p) = pivot else {
+        let by = (target - f64::from(from[index].time_ms)).round();
+        let by = i32::try_from(by as i64).ok()?;
+        let out = rbl_anlz::grid::apply_with_duration(from, None, rbl_anlz::grid::Edit::Nudge(by), total as u32);
+        return (!out.is_empty()).then_some(out);
+    };
+    let runs = runs(from);
+    let run = run_at(&runs, p).filter(|r| r.steady)?;
+    let at = f64::from(from[p].time_ms);
+    let period = if run.beats.contains(&index) {
+        (target - at) / (index as f64 - p as f64)
+    } else if index >= run.beats.end {
+        // The grabbed beat is past the run, so it moves with the run's end and keeps its
+        // distance from it.
+        let end = run.beats.end;
+        (target - at - f64::from(from[index].time_ms - from[end].time_ms)) / (end as f64 - p as f64)
+    } else {
+        // Before the run, the grid stays put, so there's nothing to stretch.
+        return None;
+    };
+    respace_run(from, p, period, total)
+}
+
+/// The grid at `bpm`, with beat `pivot` held still. A grid whose tempo changes has only the
+/// steady run under the pivot respaced.
+fn typed_tempo(beats: &[Beat], pivot: usize, bpm: f64, total: f64) -> Result<Vec<Beat>, TempoRefused> {
+    let range = f64::from(rbl_anlz::grid::MIN_BPM_X100) / 100.0..=f64::from(rbl_anlz::grid::MAX_BPM_X100) / 100.0;
+    if !range.contains(&bpm) {
+        return Err(TempoRefused::OutOfRange);
+    }
+    if !dynamic(beats) {
+        return retempo(beats, pivot, bpm, total).ok_or(TempoRefused::OutOfRange);
+    }
+    respace_run(beats, pivot, 60_000.0 / bpm, total).ok_or(TempoRefused::Changing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOTAL: f64 = 60_000.0;
+
+    /// Sixteen beats at 120 BPM from 0 ms, then sixteen at 128.
+    fn two_tempos() -> Vec<Beat> {
+        let mut at = 0.0;
+        (0..32)
+            .map(|i| {
+                let bpm = if i < 16 { 120.0 } else { 128.0 };
+                let b = Beat { beat_number: (i % 4 + 1) as u16, tempo_x100: (bpm * 100.0) as u16, time_ms: f64::round(at) as u32 };
+                at += 60_000.0 / bpm;
+                b
+            })
+            .collect()
+    }
+
+    /// The tempos in a grid, in order, each once.
+    fn tempos(beats: &[Beat]) -> Vec<u16> {
+        let mut out: Vec<u16> = beats.iter().map(|b| b.tempo_x100).collect();
+        out.dedup();
+        out
+    }
+
+    #[test]
+    fn sliding_a_grid_with_two_tempos_keeps_both() {
+        let g = two_tempos();
+        let out = dragged(&g, 4, f64::from(g[4].time_ms) + 30.0, None, TOTAL).unwrap();
+        assert_eq!(tempos(&out), [12000, 12800]);
+        // Every beat moved the same way, so every gap is as it was.
+        let at = out.iter().position(|b| b.time_ms == g[4].time_ms + 30).unwrap();
+        for i in 0..g.len() - 4 {
+            assert_eq!(out[at - 4 + i].time_ms, g[i].time_ms + 30);
+        }
+    }
+
+    #[test]
+    fn stretching_the_first_tempo_keeps_the_second() {
+        // Beat 4 is pinned and beat 10 dragged 40 ms earlier: the first run speeds up.
+        let g = two_tempos();
+        let out = dragged(&g, 10, f64::from(g[10].time_ms) - 40.0, Some(4), TOTAL).unwrap();
+        assert_eq!(out[4].time_ms, g[4].time_ms);
+        assert_eq!(out[10].time_ms, g[10].time_ms - 40);
+        // 2960 ms over six beats is 493.33 ms a beat, 121.62 BPM.
+        assert_eq!(tempos(&out), [12162, 12800]);
+        assert!(out[16..].iter().all(|b| b.tempo_x100 == 12800));
+        // Dragging a beat in the second run moves it, and it stays at 128.
+        let out = dragged(&g, 20, f64::from(g[20].time_ms) - 40.0, Some(4), TOTAL).unwrap();
+        assert_eq!(out[20].time_ms, g[20].time_ms - 40);
+        assert_eq!(tempos(&out).len(), 2);
+        assert!(out[..16].iter().all(|b| b.tempo_x100 > 12000));
+        assert!(out[16..].iter().all(|b| b.tempo_x100 == 12800));
+    }
+
+    #[test]
+    fn typing_the_first_tempo_keeps_the_second() {
+        let g = two_tempos();
+        let out = typed_tempo(&g, 4, 124.0, TOTAL).unwrap();
+        assert_eq!(out[4].time_ms, g[4].time_ms);
+        assert_eq!(tempos(&out), [12400, 12800]);
+        assert_eq!(tempo_at(&out, 4), 124.0);
+        assert_eq!(tempo_at(&out, 20), 128.0);
+        assert_eq!(typed_tempo(&g, 4, 39.0, TOTAL), Err(TempoRefused::OutOfRange));
+    }
+
+    #[test]
+    fn a_tempo_cant_be_typed_where_it_changes() {
+        // Two beats of a ramp between the two tempos, too few to be steady.
+        let mut g = two_tempos();
+        g[16].tempo_x100 = 12300;
+        g[17].tempo_x100 = 12600;
+        assert_eq!(typed_tempo(&g, 16, 124.0, TOTAL), Err(TempoRefused::Changing));
     }
 }
