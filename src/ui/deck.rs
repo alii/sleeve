@@ -348,6 +348,9 @@ fn grid_button(key: &'static str, label: &'static str, help: &'static str, k: &K
 /// The buttons shown in place of the cue pads while editing the grid.
 fn grid_tools(s: &App, k: &Kit) -> El {
     use crate::grid_edit::GridTool;
+    if let Some(g) = s.grid_edit.as_ref().filter(|g| g.ramp.is_some()) {
+        return ramp_tools(s, g.ramp_change(), k);
+    }
     let c = &k.c;
     let tool = |key, label, help, t: GridTool| grid_button(key, label, help, k).on_press(move |s: &mut App| s.grid_tool(t));
     // The tempo, typed in: Return spaces the beats for it around the pinned beat.
@@ -373,6 +376,50 @@ fn grid_tools(s: &App, k: &Kit) -> El {
         .child(tool("deck-grid-snap", "SNAP", "Snap the nearest beat to the playhead, and pin it", GridTool::SnapToPlayhead))
         .child(tool("deck-grid-halve", "÷2", "Halve the grid: half the beats, half the BPM", GridTool::Halve))
         .child(tool("deck-grid-double", "×2", "Double the grid: twice the beats, twice the BPM", GridTool::Double))
+        .child(grid_button("deck-grid-tempo", "TEMPO", "Add a tempo change at the playhead, or edit the one it's in", k).on_press(|s: &mut App| s.start_ramp()))
+}
+
+/// What takes the grid tools' place while a tempo change is open: the tempo it goes from and
+/// to, its bars, and Remove and Done. `change` is None for a new one with no tempo yet.
+fn ramp_tools(s: &App, change: Option<crate::grid_map::Change>, k: &Kit) -> El {
+    let c = &k.c;
+    let faint = |t: String| text(t).font(k.ty.small.features("'tnum' 1")).color(c.text_faint);
+    let field = |edit: &rune::TextEdit, label: &'static str, placeholder: &'static str, width: f32| {
+        rune_kit::TextInput::new(edit).label(label).placeholder(placeholder).text_style(k.ty.small_medium.features("'tnum' 1")).height(PAD.1).width(Some(width))
+    };
+    let from = change.map(|c| c.from).or_else(|| {
+        let g = s.grid_edit.as_ref()?;
+        let i = crate::grid_map::nearest(&g.beats, g.ramp.as_ref()?.start_ms)?;
+        Some(f64::from(g.beats[i.checked_sub(1)?].tempo_x100) / 100.0)
+    });
+    let to = field(&s.grid_bpm, "The tempo it changes to, in BPM", "BPM", 54.0)
+        .on_edit(|s: &mut App| &mut s.grid_bpm)
+        .on_submit(|s: &mut App, _| s.set_ramp_tempo())
+        .build(k)
+        .key("deck-ramp-to")
+        .help("Type the tempo it changes to and press Return. The bars stay and the end moves to fit");
+    let bars = field(&s.ramp_bars, "How many bars the change takes", "bars", 38.0)
+        .on_edit(|s: &mut App| &mut s.ramp_bars)
+        .on_submit(|s: &mut App, _| s.set_ramp_bars())
+        .build(k)
+        .key("deck-ramp-bars")
+        .help("Type how many bars the change takes and press Return. The end stays where it is. 0 makes it instant");
+    let remove = match change {
+        Some(_) => grid_button("deck-ramp-remove", "Remove", "Take the tempo change out: the grid carries on at the tempo before it", k).on_press(|s: &mut App| s.remove_ramp()),
+        None => grid_button("deck-ramp-remove", "Cancel", "Stop adding the tempo change · Esc", k).on_press(|s: &mut App| s.close_ramp()),
+    };
+    row()
+        .key("deck-ramp-tools")
+        .gap(4.0)
+        .center_y()
+        .child(faint(from.map_or_else(String::new, |f| format!("{f:.2} →"))))
+        .child(to)
+        .child(faint("BPM over".to_owned()))
+        .child(bars)
+        .child(faint("bars".to_owned()))
+        .child(el().w(4.0))
+        .child(remove)
+        .children(change.map(|_| grid_button("deck-ramp-done", "Done", "Keep the tempo change and go back to the grid tools · Esc", k).on_press(|s: &mut App| s.close_ramp())))
 }
 
 const VOLUME_W: f32 = 72.0;
@@ -609,6 +656,9 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
         let x = x_of(pin as f32 / 1000.0);
         world = world.child(el().key("deck-zoom-pin").absolute(x - 4.0, ZOOM_H - 10.0).size(8.0, 8.0).radius(4.0).fill(c.icon_accent));
     }
+    if let Some(g) = edit.filter(|g| g.ramp.is_some()) {
+        world = open_change(world, g, &x_of, c.icon_accent);
+    }
     strip = strip.child(world);
     if let Some(g) = edit {
         let mut bar = row()
@@ -622,7 +672,15 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
             .radius(6.0)
             .center_y()
             .fill(screen())
-            .child(text(format!("Drag to slide · {STRETCH_KEY}-drag to stretch")).font(k.ty.small).color(screen_ink().alpha(0.7)));
+            .child(
+                text(match g.ramp.as_ref().map(|_| g.ramp_change()) {
+                    None => format!("Drag to slide · {STRETCH_KEY}-drag to stretch"),
+                    Some(None) => "Type the tempo it changes to, and the bars it takes".to_owned(),
+                    Some(Some(_)) => "Drag the end to where the new tempo settles".to_owned(),
+                })
+                .font(k.ty.small)
+                .color(screen_ink().alpha(0.7)),
+            );
         if g.changed() {
             bar = bar.child(
                 row()
@@ -700,6 +758,19 @@ fn zoomed(s: &App, cues: &[Option<rbl_index::Cue>; 8], memory: &[rbl_index::Cue]
     })
 }
 
+/// The tempo change open for editing, on the zoomed waveform's moving layer: its start, and its
+/// end with a grip to drag. A new one with no tempo yet has only its start.
+fn open_change(world: El, g: &crate::grid_edit::GridEdit, x_of: &dyn Fn(f32) -> f32, ink: Color) -> El {
+    let x = |ms: f64| x_of(ms as f32 / 1000.0);
+    let line = |key: &'static str, x: f32| el().key(key).absolute(x - 1.0, 0.0).size(2.0, ZOOM_H).fill(ink);
+    let Some(change) = g.ramp_change() else {
+        return world.child(line("deck-ramp-start", x(g.ramp.as_ref().map_or(0.0, |r| r.start_ms))));
+    };
+    let (x0, x1) = (x(f64::from(g.beats[change.start].time_ms)), x(f64::from(g.beats[change.end].time_ms)));
+    let grip = el().key("deck-ramp-grip").absolute(x1 - 4.0, ZOOM_H / 2.0 - 14.0).size(8.0, 28.0).radius(4.0).border(1.5, ink).fill(screen());
+    world.child(line("deck-ramp-start", x0)).child(line("deck-ramp-end", x1)).child(grip)
+}
+
 /// Marks the grid's tempo changes on the zoomed waveform's moving layer: a tint across one that
 /// takes a few beats, a line at one that's instant, and the tempos either side, like "120.00 →
 /// 128.00". `reach` is how far right the layer is drawn.
@@ -710,8 +781,8 @@ fn tempo_changes(mut world: El, beats: &[rbl_anlz::Beat], runs: &[crate::grid_ma
     for (i, run) in runs.iter().enumerate() {
         let key = format!("deck-zoom-tempo-{i}");
         let (x0, x1, (from, to)) = if !run.steady {
-            // It runs from the last beat at the old tempo to the first at the new one.
-            (x_at(run.beats.start.saturating_sub(1)), x_at(run.beats.end), run.tempos(beats))
+            // It runs from the first beat whose gap is off the old tempo to the first at the new one.
+            (x_at(run.beats.start), x_at(run.beats.end), run.tempos(beats))
         } else if i > 0 && runs[i - 1].steady {
             let x = x_at(run.beats.start);
             (x, x, (runs[i - 1].tempos(beats).0, run.tempos(beats).0))

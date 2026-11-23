@@ -10,13 +10,16 @@
 //! A grid whose tempo changes keeps its changes. Sliding moves every beat by the same amount,
 //! and stretching or typing a tempo respaces only the steady stretch the pinned beat is in.
 //!
+//! TEMPO adds a tempo change at the playhead, or opens the one it's in: the new tempo and the
+//! bar count are typed, and the change's end can be dragged onto where the new tempo settles.
+//!
 //! Edits stay in memory, with undo and revert, until Grid is turned off, which saves once.
 
 use rbl_anlz::Beat;
 use rune::Phase;
 
 use crate::app::App;
-use crate::grid_map::{fit_grid, nearest, respace_run, retempo, run_at, runs};
+use crate::grid_map::{Change, Misfit, change_in, fit_grid, nearest, remove_change, respace_run, retempo, run_at, runs, set_change};
 use crate::jobs::{JobKind, Outcome};
 
 /// A grid being edited.
@@ -33,6 +36,15 @@ pub struct GridEdit {
     /// it still. Before any slide, stretching holds the beat nearest the playhead.
     pub pivot_ms: Option<f64>,
     grab: Option<Grab>,
+    /// The tempo change open for editing, if TEMPO was pressed.
+    pub ramp: Option<RampEdit>,
+}
+
+/// A tempo change open for editing. Only where it starts is kept: its tempos, end and bars are
+/// read from the grid each time, so they can't disagree with it. Until a tempo is typed for a
+/// new one, there's no change in the grid at `start_ms` yet.
+pub struct RampEdit {
+    pub start_ms: f64,
 }
 
 /// The grid buttons shown while editing.
@@ -57,6 +69,8 @@ struct Grab {
     start_ms: f64,
     /// The beat held still, when stretching.
     pivot: Option<usize>,
+    /// The tempo change whose end this drag moves, if it's one.
+    ramp: Option<Change>,
 }
 
 impl GridEdit {
@@ -73,6 +87,39 @@ impl GridEdit {
         }
         self.undo.push(std::mem::replace(&mut self.beats, beats));
         true
+    }
+
+    /// Puts the grid back as it was before the last change. A tempo change open for editing
+    /// that's no longer in the grid is closed. False if there's nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        let Some(before) = self.undo.pop() else { return false };
+        self.beats = before;
+        self.find_ramp();
+        true
+    }
+
+    /// The tempo change open for editing, as the grid has it now. None for a new one that
+    /// has no tempo yet.
+    pub fn ramp_change(&self) -> Option<Change> {
+        let at = self.ramp.as_ref()?.start_ms;
+        change_in(&self.beats, at, at)
+    }
+
+    /// Follows the open tempo change after the grid changed, closing it if it's gone.
+    fn find_ramp(&mut self) {
+        match self.ramp_change() {
+            Some(c) => self.ramp = Some(RampEdit { start_ms: f64::from(self.beats[c.start].time_ms) }),
+            None => self.ramp = None,
+        }
+    }
+
+    /// Makes `beats` the grid after an edit to the open tempo change, which starts at beat
+    /// `start` and now runs `span` ms. Its start is found again, as beats at the very ends of
+    /// a change can come out close enough to the tempo either side to count as steady.
+    fn commit_ramp(&mut self, beats: Vec<Beat>, start: usize, span: f64) {
+        let t0 = f64::from(self.beats[start].time_ms);
+        self.commit(beats);
+        self.ramp = change_in(&self.beats, t0, t0 + span).map(|c| RampEdit { start_ms: f64::from(self.beats[c.start].time_ms) });
     }
 }
 
@@ -93,7 +140,7 @@ impl App {
         if beats.is_empty() {
             return;
         }
-        self.grid_edit = Some(GridEdit { id, saved: beats.clone(), beats, undo: Vec::new(), pivot_ms: None, grab: None });
+        self.grid_edit = Some(GridEdit { id, saved: beats.clone(), beats, undo: Vec::new(), pivot_ms: None, grab: None, ramp: None });
         self.show_grid_edit();
     }
 
@@ -163,16 +210,27 @@ impl App {
     /// One step of a drag on the zoomed waveform with Grid on. `at_ms` is the time under the
     /// pointer. `stretch`, read at the press, holds the pinned beat still and changes the tempo
     /// instead of sliding everything. `ms_per_px` is how much time a point on screen covers,
-    /// for telling what's under the pointer. Nothing uses it yet.
-    pub fn grid_drag(&mut self, phase: Phase, at_ms: f64, _ms_per_px: f64, stretch: bool, cancelled: bool) {
+    /// for telling what's under the pointer. With a tempo change open, only its end can be
+    /// dragged, from up to 8 points either side of it.
+    pub fn grid_drag(&mut self, phase: Phase, at_ms: f64, ms_per_px: f64, stretch: bool, cancelled: bool) {
         let Some(total) = self.deck_duration_ms().filter(|t| *t > 0.0) else { return };
         let playhead = self.player.now() * total;
         let Some(g) = self.grid_edit.as_mut() else { return };
+        if let Phase::Down = phase
+            && g.ramp.is_some()
+        {
+            let Some(c) = g.ramp_change() else { return };
+            let end = f64::from(g.beats[c.end].time_ms);
+            if (at_ms - end).abs() <= 8.0 * ms_per_px {
+                g.grab = Some(Grab { index: c.end, from: g.beats.clone(), start_ms: at_ms, pivot: None, ramp: Some(c) });
+            }
+            return;
+        }
         if let Phase::Down = phase {
             let Some(index) = nearest(&g.beats, at_ms) else { return };
             // Stretching from the pinned beat itself has nothing to hold, so it slides.
             let pivot = if stretch { nearest(&g.beats, g.pivot_ms.unwrap_or(playhead)).filter(|p| *p != index) } else { None };
-            g.grab = Some(Grab { index, from: g.beats.clone(), start_ms: at_ms, pivot });
+            g.grab = Some(Grab { index, from: g.beats.clone(), start_ms: at_ms, pivot, ramp: None });
             return;
         }
         let Some(grab) = g.grab.as_ref() else { return };
@@ -182,7 +240,10 @@ impl App {
         } else {
             // The grabbed beat moves as far as the pointer has, so it doesn't jump to it.
             let target = f64::from(grab.from[grab.index].time_ms) + at_ms - grab.start_ms;
-            let fitted = dragged(&grab.from, grab.index, target, grab.pivot, total);
+            let fitted = match grab.ramp {
+                Some(c) => end_dragged(&grab.from, c, target, total),
+                None => dragged(&grab.from, grab.index, target, grab.pivot, total),
+            };
             // A drag that asks for an impossible grid (the beats crossing over, say) holds at
             // the last one that worked.
             if let Some(beats) = fitted {
@@ -193,8 +254,10 @@ impl App {
                 && let Some(grab) = g.grab.take()
             {
                 let dropped = std::mem::replace(&mut g.beats, grab.from);
-                if g.commit(dropped) && grab.pivot.is_none() {
-                    g.pivot_ms = Some(target);
+                match grab.ramp {
+                    Some(c) => g.commit_ramp(dropped, c.start, target - f64::from(g.beats[c.start].time_ms)),
+                    None if g.commit(dropped) && grab.pivot.is_none() => g.pivot_ms = Some(target),
+                    None => {}
                 }
             }
         }
@@ -232,8 +295,9 @@ impl App {
     /// Puts the grid back as it was before the last change. False if there's nothing to undo.
     pub fn undo_grid(&mut self) -> bool {
         let Some(g) = self.grid_edit.as_mut() else { return false };
-        let Some(before) = g.undo.pop() else { return false };
-        g.beats = before;
+        if !g.undo() {
+            return false;
+        }
         self.show_grid_edit();
         true
     }
@@ -245,7 +309,121 @@ impl App {
             return;
         }
         g.pivot_ms = None;
+        g.find_ramp();
         self.show_grid_edit();
+    }
+
+    /// TEMPO: opens the tempo change the playhead is in, or starts a new one at the beat
+    /// nearest it, which gets a tempo once one is typed.
+    pub fn start_ramp(&mut self) {
+        let Some(total) = self.deck_duration_ms() else { return };
+        let playhead = self.player.now() * total;
+        self.start_ramp_at(playhead);
+    }
+
+    pub(crate) fn start_ramp_at(&mut self, ms: f64) {
+        let Some(g) = self.grid_edit.as_mut() else { return };
+        if let Some(c) = change_in(&g.beats, ms, ms) {
+            g.ramp = Some(RampEdit { start_ms: f64::from(g.beats[c.start].time_ms) });
+        } else {
+            let runs = runs(&g.beats);
+            let i = nearest(&g.beats, ms).unwrap_or(0);
+            // A new change can't start on a steady run's first beat, as one has just ended there.
+            let start = match run_at(&runs, i) {
+                Some(r) if r.steady && i + 1 < r.beats.end => i.max(r.beats.start + 1),
+                _ if runs.iter().any(|r| r.steady) => return self.refuse("Adding a tempo change", "Move the playhead to where the tempo holds steady to start a tempo change there."),
+                _ => return self.refuse("Adding a tempo change", "This grid's tempo never holds steady, so there's no tempo to change from. Analyse the track again, or fix the grid in rekordbox."),
+            };
+            g.ramp = Some(RampEdit { start_ms: f64::from(g.beats[start].time_ms) });
+            self.ramp_bars = rune::TextEdit::new("4");
+        }
+        self.show_grid_edit();
+    }
+
+    /// Done, or Escape: closes the tempo change, keeping it as it is.
+    pub fn close_ramp(&mut self) {
+        if let Some(g) = self.grid_edit.as_mut() {
+            g.ramp = None;
+        }
+        self.show_grid_edit();
+    }
+
+    /// Sets the tempo the open change goes to, from the box. Its bars stay, and its end moves
+    /// to fit an even change.
+    pub fn set_ramp_tempo(&mut self) {
+        let range = f64::from(rbl_anlz::grid::MIN_BPM_X100) / 100.0..=f64::from(rbl_anlz::grid::MAX_BPM_X100) / 100.0;
+        let Some(bpm) = typed(&self.grid_bpm).filter(|b| range.contains(b)) else {
+            return self.refuse("Setting the tempo change", "Type a tempo from 40 to 499 BPM.");
+        };
+        let bars = typed(&self.ramp_bars);
+        let Some((start, n, from)) = self.ramp_parts(bars) else { return };
+        if (bpm - from).abs() < 0.01 {
+            return self.refuse("Setting the tempo change", "That's the tempo it changes from. Type the tempo it changes to.");
+        }
+        self.edit_ramp(start, n, n as f64 * (30_000.0 / from + 30_000.0 / bpm), bpm);
+    }
+
+    /// Sets the open change's bars, from the box. Its end stays where it is, unless it was an
+    /// instant change, which is spread evenly. 0 bars makes it instant.
+    pub fn set_ramp_bars(&mut self) {
+        let Some(bars) = typed(&self.ramp_bars).filter(|b| (0.0..=64.0).contains(b)) else {
+            return self.refuse("Setting the tempo change", "Type how many bars the change takes, from 0 to 64.");
+        };
+        let Some(g) = self.grid_edit.as_ref() else { return };
+        // A new change gets its bars with its tempo.
+        let Some(c) = g.ramp_change() else { return };
+        let n = (bars * 4.0).round() as usize;
+        let span = match c.end - c.start {
+            0 => n as f64 * (30_000.0 / c.from + 30_000.0 / c.to),
+            _ => f64::from(g.beats[c.end].time_ms - g.beats[c.start].time_ms),
+        };
+        self.edit_ramp(c.start, n, span, c.to);
+    }
+
+    /// Remove: takes the open change out. The grid carries on at the tempo before it.
+    pub fn remove_ramp(&mut self) {
+        let Some(total) = self.deck_duration_ms() else { return };
+        let Some(g) = self.grid_edit.as_mut() else { return };
+        if let Some(beats) = g.ramp_change().and_then(|c| remove_change(&g.beats, c, total)) {
+            g.commit(beats);
+        }
+        g.ramp = None;
+        self.show_grid_edit();
+    }
+
+    /// Where the open change starts, its beats and the tempo it changes from. A new one takes
+    /// `bars`, if typed.
+    fn ramp_parts(&self, bars: Option<f64>) -> Option<(usize, usize, f64)> {
+        let g = self.grid_edit.as_ref()?;
+        if let Some(c) = g.ramp_change() {
+            return Some((c.start, c.end - c.start, c.from));
+        }
+        let start = nearest(&g.beats, g.ramp.as_ref()?.start_ms)?;
+        let n = (bars.unwrap_or(4.0).clamp(0.0, 64.0) * 4.0).round() as usize;
+        Some((start, n, f64::from(g.beats[start.checked_sub(1)?].tempo_x100) / 100.0))
+    }
+
+    /// Makes the open change, at beat `start`, take `n` beats over `span` ms up to `bpm`, or
+    /// says why it can't.
+    fn edit_ramp(&mut self, start: usize, n: usize, span: f64, bpm: f64) {
+        let Some(total) = self.deck_duration_ms() else { return };
+        let Some(g) = self.grid_edit.as_mut() else { return };
+        let old_n = g.ramp_change().map_or(0, |c| c.end - c.start);
+        let span = if n == 0 { 0.0 } else { span };
+        match set_change(&g.beats, start, old_n, n, span, bpm, total) {
+            Ok(beats) => g.commit_ramp(beats, start, span),
+            Err(Misfit::Bars(best)) => {
+                let why = format!("That many bars won't fit between the start and end of this change. {best} bars would, or drag the end.");
+                self.jobs.spawn(JobKind::Edit, "Setting the tempo change", move |_| Outcome::Failed(why));
+            }
+            Err(Misfit::Grid) => self.refuse("Setting the tempo change", "That change would take the grid outside the 40 to 499 BPM rekordbox allows."),
+        }
+        self.show_grid_edit();
+    }
+
+    /// Says in the status bar why something wasn't done.
+    fn refuse(&mut self, doing: &'static str, why: &'static str) {
+        self.jobs.spawn(JobKind::Edit, doing, move |_| Outcome::Failed(why.to_owned()));
     }
 
     /// Shows the edited grid on the deck, in place of the one read from disk, and in the BPM
@@ -255,6 +433,14 @@ impl App {
         let Some(g) = self.grid_edit.as_ref() else { return };
         let bpm = nearest(&g.beats, g.pivot_ms.unwrap_or(playhead)).map_or(0.0, |p| tempo_at(&g.beats, p));
         self.grid_bpm = rune::TextEdit::new(format!("{bpm:.2}"));
+        // With a tempo change open, the box is the tempo it changes to, and its bars beside it.
+        if g.ramp.is_some() {
+            let c = g.ramp_change();
+            self.grid_bpm = rune::TextEdit::new(c.map_or_else(String::new, |c| format!("{:.2}", c.to)));
+            if let Some(c) = c {
+                self.ramp_bars = rune::TextEdit::new(format!("{}", (c.end - c.start) as f64 / 4.0));
+            }
+        }
         if let Some(w) = self.deck_wave.as_mut()
             && g.id == w.id
         {
@@ -319,6 +505,23 @@ fn dragged(from: &[Beat], index: usize, target: f64, pivot: Option<usize>, total
         return None;
     };
     respace_run(from, p, period, total)
+}
+
+/// The grid `from` with the end of tempo change `c` dragged to `target` ms. It keeps its beats
+/// and its tempos, and the curve between them bends to fit. An instant change spreads over
+/// however many beats fit evenly.
+fn end_dragged(from: &[Beat], c: Change, target: f64, total: f64) -> Option<Vec<Beat>> {
+    let span = target - f64::from(from[c.start].time_ms);
+    let n = match c.end - c.start {
+        0 => ((2.0 * span / (60_000.0 / c.from + 60_000.0 / c.to)).round() as usize).max(1),
+        n => n,
+    };
+    set_change(from, c.start, c.end - c.start, n, span, c.to, total).ok()
+}
+
+/// A number typed in a box, with a comma or a point.
+fn typed(t: &rune::TextEdit) -> Option<f64> {
+    t.text.trim().replace(',', ".").parse().ok()
 }
 
 /// The grid at `bpm`, with beat `pivot` held still. A grid whose tempo changes has only the
@@ -399,6 +602,26 @@ mod tests {
         assert_eq!(tempo_at(&out, 4), 124.0);
         assert_eq!(tempo_at(&out, 20), 128.0);
         assert_eq!(typed_tempo(&g, 4, 39.0, TOTAL), Err(TempoRefused::OutOfRange));
+    }
+
+    #[test]
+    fn undo_takes_a_tempo_change_back_exactly() {
+        let g = two_tempos();
+        let mut edit = GridEdit { id: String::new(), saved: g.clone(), beats: g.clone(), undo: Vec::new(), pivot_ms: None, grab: None, ramp: None };
+        // A new change at beat 8, ramping to 124 over a bar, then a second bar.
+        edit.ramp = Some(RampEdit { start_ms: f64::from(g[8].time_ms) });
+        let once = set_change(&g, 8, 0, 4, 4.0 * (500.0 + 60_000.0 / 124.0) / 2.0, 124.0, TOTAL).unwrap();
+        edit.commit_ramp(once.clone(), 8, 1950.0);
+        assert_eq!(edit.ramp_change().map(|c| (c.start, c.end)), Some((8, 12)));
+        let twice = set_change(&once, 8, 4, 8, 8.0 * (500.0 + 60_000.0 / 124.0) / 2.0, 124.0, TOTAL).unwrap();
+        edit.commit_ramp(twice, 8, 3900.0);
+        assert!(edit.undo());
+        assert_eq!(edit.beats, once);
+        assert!(edit.ramp.is_some());
+        // Undoing the change it was made with closes it, as it's gone.
+        assert!(edit.undo());
+        assert_eq!(edit.beats, g);
+        assert!(edit.ramp.is_none());
     }
 
     #[test]

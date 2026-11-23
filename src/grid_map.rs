@@ -157,6 +157,103 @@ pub fn respace_run(beats: &[Beat], pivot: usize, period: f64, track_ms: f64) -> 
     splice(beats, run.beats.start..end, &times, track_ms)
 }
 
+/// A tempo change in the grid. The beats from `start` up to `end` have tempos between `from`
+/// and `to`, and `end` is the first beat at the new tempo. In an instant change they're the same.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Change {
+    pub start: usize,
+    pub end: usize,
+    pub from: f64,
+    pub to: f64,
+}
+
+/// The tempo changes in the grid, in order. Only those with steady runs either side count, as
+/// the others have no one tempo to change from or to.
+pub fn changes(beats: &[Beat]) -> Vec<Change> {
+    let runs = runs(beats);
+    let mut out = Vec::new();
+    for (before, run) in runs.iter().zip(runs.iter().skip(1)).filter(|(b, _)| b.steady) {
+        let (start, end) = (run.beats.start, run.beats.end);
+        if run.steady {
+            out.push(Change { start, end: start, from: before.tempos(beats).0, to: run.tempos(beats).0 });
+        } else if end < beats.len() {
+            let (from, to) = run.tempos(beats);
+            out.push(Change { start, end, from, to });
+        }
+    }
+    out
+}
+
+/// The first tempo change that overlaps `from_ms` to `to_ms`, give or take half a beat.
+pub fn change_in(beats: &[Beat], from_ms: f64, to_ms: f64) -> Option<Change> {
+    let at = |i: usize| f64::from(beats[i].time_ms);
+    changes(beats).into_iter().find(|c| {
+        let half = 30_000.0 / c.from;
+        at(c.end) + half >= from_ms && at(c.start) - half <= to_ms
+    })
+}
+
+/// Beat times across a tempo change of `n` beats lasting `span` ms, from 0 to `span`, going
+/// from beats `p0` ms long to beats `p1` ms long. Beat i is `p0 + (p1 - p0) * x^k` long, where
+/// `x` is the middle of the beat as a fraction of the change, and `k` is picked so the beats
+/// fill the span. They're then scaled a little so the last lands exactly on it.
+///
+/// If `n` beats can't fill the span going between those tempos, the error is the number that
+/// would fit best.
+pub fn ramp_times(p0: f64, p1: f64, n: usize, span: f64) -> Result<Vec<f64>, usize> {
+    let best = ((2.0 * span / (p0 + p1)).round() as usize).max(1);
+    // How far along from p0 to p1 the average beat is. The curve's average is 1 / (k + 1).
+    let a = (span / n as f64 - p0) / (p1 - p0);
+    if n == 0 || !(a > 0.0 && a < 1.0) {
+        return Err(best);
+    }
+    let k = 1.0 / a - 1.0;
+    let lengths: Vec<f64> = (0..n).map(|i| p0 + (p1 - p0) * ((i as f64 + 0.5) / n as f64).powf(k)).collect();
+    let scale = span / lengths.iter().sum::<f64>();
+    let mut times = vec![0.0];
+    for l in lengths {
+        times.push(times[times.len() - 1] + l * scale);
+    }
+    times[n] = span;
+    Ok(times)
+}
+
+/// Why a tempo change couldn't be made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Misfit {
+    /// That many bars can't fill the change. This many would.
+    Bars(f64),
+    /// The grid would come out wrong, with a tempo outside 40 to 499 BPM, say.
+    Grid,
+}
+
+/// The grid with the tempo change at beat `start`, which takes `old_n` beats (0 for an instant
+/// change, or one not made yet), made to take `n` beats over `span` ms, going to `bpm`. The
+/// steady run after it keeps its number of beats, at the new tempo, and everything after that
+/// moves along as it was, so later changes are kept.
+pub fn set_change(beats: &[Beat], start: usize, old_n: usize, n: usize, span: f64, bpm: f64, track_ms: f64) -> Result<Vec<Beat>, Misfit> {
+    let runs = runs(beats);
+    let after = run_at(&runs, start + old_n).filter(|r| r.steady && start > 0).ok_or(Misfit::Grid)?;
+    let p0 = 6_000_000.0 / f64::from(beats[start - 1].tempo_x100);
+    let p1 = 60_000.0 / bpm;
+    let t0 = f64::from(beats[start].time_ms);
+    let mut times = match n {
+        0 => vec![t0],
+        _ => ramp_times(p0, p1, n, span).map_err(|best| Misfit::Bars(best as f64 / 4.0))?.iter().map(|t| t0 + t).collect(),
+    };
+    // The beat after the steady run is moved too, as it ends the run's last gap.
+    let end = (after.beats.end + 1).min(beats.len());
+    let last = times[times.len() - 1];
+    times.extend((1..end - (start + old_n)).map(|j| last + j as f64 * p1));
+    splice(beats, start..end, &times, track_ms).ok_or(Misfit::Grid)
+}
+
+/// The grid without tempo change `c`: it carries on at the tempo before it up to the next
+/// change, and everything after moves along as it was.
+pub fn remove_change(beats: &[Beat], c: Change, track_ms: f64) -> Option<Vec<Beat>> {
+    set_change(beats, c.start, c.end - c.start, 0, 0.0, c.from, track_ms).ok()
+}
+
 fn next_number(n: u16) -> u16 {
     number_after(n, 1)
 }
@@ -442,6 +539,106 @@ mod tests {
         assert_eq!(runs(&out)[..2], [Run { beats: 0..16, steady: true }, Run { beats: 16..runs(&out)[1].beats.end, steady: true }]);
         // A beat in the middle of a ramp has no one tempo to set.
         assert_eq!(respace_run(&ramp(), 11, 500.0, 60_000.0), None);
+    }
+
+    #[test]
+    fn a_ramp_fills_its_span_exactly() {
+        let (p0, p1) = (500.0, 60_000.0 / 128.0);
+        for span in [7600.0, 7750.0, 7900.0] {
+            let t = ramp_times(p0, p1, 16, span).unwrap();
+            assert_eq!((t.len(), t[0], t[16]), (17, 0.0, span));
+            let gaps: Vec<f64> = t.windows(2).map(|w| w[1] - w[0]).collect();
+            assert!(gaps.windows(2).all(|g| g[1] < g[0]), "each beat shorter than the last at {span}");
+        }
+        // 16 beats can't take longer than 16 at the old tempo. 17 fits best.
+        assert_eq!(ramp_times(p0, p1, 16, 8160.0), Err(17));
+        assert_eq!(ramp_times(p0, p0, 16, 8000.0), Err(16), "no change to make");
+    }
+
+    const LONG: f64 = 120_000.0;
+
+    /// Sixty-four beats at 120 BPM with a ramp up to 128 over beats 8 to 24, then one down to
+    /// 124 over beats 40 to 48.
+    fn two_changes() -> Vec<Beat> {
+        let g = steady(120.0, 64);
+        let g = set_change(&g, 8, 0, 16, 16.0 * (500.0 + 468.75) / 2.0, 128.0, LONG).unwrap();
+        let p = 60_000.0 / 124.0;
+        set_change(&g, 40, 0, 8, 8.0 * (468.75 + p) / 2.0, 124.0, LONG).unwrap()
+    }
+
+    /// Checks change `c` of `before` is still in `after`, as its change `nth`, every beat of it
+    /// and after it the same, only moved.
+    fn kept(before: &[Beat], c: Change, after: &[Beat], nth: usize) {
+        let now = changes(after)[nth];
+        assert_eq!(now.to, c.to);
+        assert_eq!(now.end - now.start, c.end - c.start);
+        let (was, is) = (&before[c.start..], &after[now.start..]);
+        for i in 0..was.len().min(is.len()) - 1 {
+            assert_eq!(was[i].tempo_x100, is[i].tempo_x100, "tempo of beat {i}");
+            assert_eq!(was[i + 1].time_ms - was[i].time_ms, is[i + 1].time_ms - is[i].time_ms, "gap after beat {i}");
+        }
+    }
+
+    #[test]
+    fn changes_are_found_with_their_tempos() {
+        let g = two_changes();
+        let c = changes(&g);
+        assert_eq!(c.len(), 2);
+        assert_eq!((c[0].start, c[0].end, c[0].from, c[0].to), (8, 24, 120.0, 128.0));
+        assert_eq!((c[1].start, c[1].end, c[1].from, c[1].to), (40, 48, 128.0, 124.0));
+        assert_eq!(change_in(&g, 1000.0, 1000.0), None);
+        assert_eq!(change_in(&g, 6000.0, 6000.0), Some(c[0]));
+    }
+
+    #[test]
+    fn editing_a_change_leaves_the_next_alone() {
+        let g = two_changes();
+        let [first, second] = changes(&g)[..] else { panic!() };
+        let span = f64::from(g[first.end].time_ms - g[first.start].time_ms);
+        // A new tempo, which moves the end.
+        let out = set_change(&g, 8, 16, 16, 16.0 * (500.0 + 60_000.0 / 130.0) / 2.0, 130.0, LONG).unwrap();
+        assert!(out[24..40].iter().all(|b| b.tempo_x100 == 13000));
+        kept(&g, second, &out, 1);
+        // The end dragged earlier, which bends the curve.
+        let out = set_change(&g, 8, 16, 16, span - 50.0, 128.0, LONG).unwrap();
+        assert_eq!(out[24].time_ms, g[24].time_ms - 50);
+        kept(&g, second, &out, 1);
+        // Three bars can't fit where four did, going from 120 to 128. Four is the only count.
+        assert_eq!(set_change(&g, 8, 16, 12, span, 128.0, LONG), Err(Misfit::Bars(4.0)));
+        // No bars: an instant change.
+        let out = set_change(&g, 8, 16, 0, 0.0, 128.0, LONG).unwrap();
+        assert_eq!(changes(&out)[0], Change { start: 8, end: 8, from: 120.0, to: 128.0 });
+        kept(&g, second, &out, 1);
+        // Then three bars again, spread evenly.
+        let out = set_change(&out, 8, 0, 12, 12.0 * (500.0 + 468.75) / 2.0, 128.0, LONG).unwrap();
+        assert_eq!((changes(&out)[0].start, changes(&out)[0].end), (8, 20));
+        kept(&g, second, &out, 1);
+    }
+
+    #[test]
+    fn a_change_added_before_another_keeps_it() {
+        let g = two_changes();
+        let second = changes(&g)[1];
+        // A ramp up to 124 in the first steady run.
+        let out = set_change(&g, 4, 0, 4, 4.0 * (500.0 + 60_000.0 / 124.0) / 2.0, 124.0, LONG).unwrap();
+        assert_eq!(changes(&out).len(), 3);
+        assert!(out[8..12].iter().all(|b| b.tempo_x100 == 12400));
+        kept(&g, changes(&g)[0], &out, 1);
+        kept(&g, second, &out, 2);
+    }
+
+    #[test]
+    fn removing_a_change_keeps_the_ones_after() {
+        let g = two_changes();
+        let [first, second] = changes(&g)[..] else { panic!() };
+        let out = remove_change(&g, first, LONG).unwrap();
+        assert_eq!(out[..8], g[..8]);
+        let now = changes(&out);
+        assert_eq!(now.len(), 1);
+        // The steady run after it kept its sixteen beats, now at 120.
+        assert_eq!(now[0].start, 24);
+        assert!(out[..24].iter().all(|b| b.tempo_x100 == 12000));
+        kept(&g, second, &out, 0);
     }
 
     #[test]

@@ -52,6 +52,9 @@ SHOTS = [
     ("analyse-menu-narrow", "analyse-menu", "light", "900x600", None),
     ("empty", "empty", "light", "1280x800", None),
     ("tempo-change", "tempo-change", "dark", "1280x800", None),
+    ("tempo-new", "tempo-new", "dark", "1280x800", None),
+    ("tempo-edit", "tempo-edit", "dark", "1280x800", None),
+    ("tempo-edit-light", "tempo-edit", "light", "1280x800", None),
 ]
 
 

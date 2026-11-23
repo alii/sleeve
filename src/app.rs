@@ -65,6 +65,8 @@ pub struct App {
     pub(crate) grid_edit: Option<crate::grid_edit::GridEdit>,
     /// The BPM box shown while editing the grid.
     pub grid_bpm: TextEdit,
+    /// The bars box shown while editing a tempo change.
+    pub ramp_bars: TextEdit,
     /// Seconds of track the zoomed waveform shows across its width.
     pub zoom_secs: f64,
     /// A scroll or pinch on the deck that hasn't yet added up to a whole zoom step.
@@ -181,6 +183,7 @@ impl App {
             quantize: true,
             grid_edit: None,
             grid_bpm: TextEdit::new(""),
+            ramp_bars: TextEdit::new(""),
             zoom_secs: crate::deck::DEFAULT_ZOOM_SECS,
             zoom_gesture: 0.0,
             glides: std::cell::RefCell::new(None),

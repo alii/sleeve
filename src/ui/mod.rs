@@ -309,6 +309,11 @@ pub fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
         }
         return true;
     }
+    // Escape closes a tempo change open for editing, keeping it.
+    if ev.key == rune::Key::Escape && s.grid_editing() && s.grid_edit.as_ref().is_some_and(|g| g.ramp.is_some()) {
+        s.close_ramp();
+        return true;
+    }
     // While fixing the grid, undo takes back the last drag.
     if s.grid_editing() && ev.is_command('z') && !ev.mods.shift && s.undo_grid() {
         return true;

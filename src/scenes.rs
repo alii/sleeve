@@ -195,19 +195,15 @@ pub fn update_collapsed(s: &mut App) {
 /// ramp up 8 BPM just before the playhead, and an instant drop back down just after.
 pub fn tempo_change(s: &mut App) {
     playing(s);
-    // The grid and zoomed waveform are read here, not on the deck's worker, whose copy would
-    // land after the scene and put the grid on disk back.
-    s.deck_grid_rx = None;
-    let (Some(l), Some(row), Some(total)) = (s.loaded(), s.deck_row(), s.deck_duration_ms()) else { return };
-    let (share, rel) = (l.location.share_root.clone(), l.index.analysis_path.get(row as usize).to_owned());
+    deck_grid_now(s);
+    s.zoom_secs = 8.0;
+    let Some(total) = s.deck_duration_ms() else { return };
     let playhead = s.player.now() * total;
-    let Some(beats) = with_tempo_changes(&crate::deck::read_beats(&share, &rel), playhead, total) else { return };
+    let Some(beats) = with_tempo_changes(s.deck_beats(), playhead, total) else { return };
     if let Some(w) = s.deck_wave.as_mut() {
         w.runs = crate::grid_map::runs(&beats);
         w.beats = beats;
-        w.detail = crate::waveform::load_detail(&share, &rel);
     }
-    s.zoom_secs = 8.0;
 }
 
 /// `beats` speeding up by 8 BPM over six beats from 3 s before `at`, holding the new tempo for
@@ -227,4 +223,35 @@ fn with_tempo_changes(beats: &[rbl_anlz::Beat], at: f64, total: f64) -> Option<V
         t += 60_000.0 / bpm;
     }
     crate::grid_map::splice(beats, start..beats.len(), &times, total)
+}
+
+/// The deck track's grid read now, not on the deck's worker, whose copy would land after the
+/// scene and put the grid on disk back.
+fn deck_grid_now(s: &mut App) {
+    s.deck_grid_rx = None;
+    let (Some(l), Some(row)) = (s.loaded(), s.deck_row()) else { return };
+    let (share, rel) = (l.location.share_root.clone(), l.index.analysis_path.get(row as usize).to_owned());
+    let beats = crate::deck::read_beats(&share, &rel);
+    if let Some(w) = s.deck_wave.as_mut() {
+        w.runs = crate::grid_map::runs(&beats);
+        w.beats = beats;
+        w.detail = crate::waveform::load_detail(&share, &rel);
+    }
+}
+
+/// Grid on and TEMPO pressed in a steady stretch: a new tempo change waiting for its tempo.
+pub fn tempo_new(s: &mut App) {
+    playing(s);
+    deck_grid_now(s);
+    s.zoom_secs = 8.0;
+    s.toggle_grid_edit();
+    s.start_ramp();
+}
+
+/// The `tempo-change` scene with Grid on and its ramp opened with TEMPO.
+pub fn tempo_edit(s: &mut App) {
+    tempo_change(s);
+    s.toggle_grid_edit();
+    let Some(total) = s.deck_duration_ms() else { return };
+    s.start_ramp_at(s.player.now() * total - 2000.0);
 }
